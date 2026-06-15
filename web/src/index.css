@@ -1,0 +1,25 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html { scroll-behavior: smooth; }
+
+body { @apply bg-ab-bg text-white font-sans; }
+
+@layer utilities {
+  .gradient-hero {
+    background: radial-gradient(ellipse 80% 60% at 50% 0%, rgba(0,200,150,.13) 0%, transparent 70%);
+  }
+  .gradient-contact {
+    background: radial-gradient(ellipse 80% 60% at 50% 100%, rgba(0,200,150,.1) 0%, transparent 70%);
+  }
+}
+
+@keyframes float {
+  0%, 100% { transform: translateY(0px); }
+  50%       { transform: translateY(-12px); }
+}
+
+.animate-float {
+  animation: float 4s ease-in-out infinite;
+}

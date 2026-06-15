@@ -1,0 +1,25 @@
+# PyInstaller
+dist/
+build/
+*.spec
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# PyArmor
+pyarmor_runtime_000000/
+
+# App generated files
+settings.json
+logo.ico
+*.zip
+
+# Node / Web
+web/node_modules/
+web/dist/
+
+# Env
+.env
+.env.*

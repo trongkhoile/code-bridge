@@ -1,0 +1,4 @@
+flask==3.1.0
+MetaTrader5==5.0.5735
+python-dotenv==1.0.1
+customtkinter==5.2.2
