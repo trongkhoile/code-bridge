@@ -21,6 +21,10 @@ pyinstaller --noconfirm --onedir --windowed ^
     --hidden-import MetaTrader5 ^
     --hidden-import flask ^
     --hidden-import werkzeug ^
+    --hidden-import multiprocessing ^
+    --hidden-import multiprocessing.spawn ^
+    --hidden-import multiprocessing.forkserver ^
+    --hidden-import concurrent.futures ^
     app.py
 
 echo.

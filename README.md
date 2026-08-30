@@ -49,7 +49,7 @@ Sau khi điền xong → nhấn **Khởi động server**.
 
 ---
 
-## Kết nối Internet (ngrok)
+## Kết nối Internet (ngrok / VPS)
 
 Nếu chạy trên máy tính cá nhân (không phải VPS), cần ngrok để TradingView gửi được tín hiệu về máy bạn.
 
@@ -61,7 +61,12 @@ Nếu chạy trên máy tính cá nhân (không phải VPS), cần ngrok để T
 3. Copy URL dạng `https://xxxx.ngrok-free.app`
 4. Dán vào ô **Public URL** trong phần mềm
 
-> Nếu dùng VPS thì dán IP hoặc domain VPS vào ô Public URL, không cần ngrok.
+Nếu dùng VPS (khuyến nghị cho chạy 24/7):
+
+- Cài app này **trực tiếp trên VPS** (MT5 phải chạy cùng máy với app).
+- Mở port app đang dùng (mặc định `8000`) ở **2 lớp tường lửa**: Windows Firewall trên VPS, và tường lửa mạng của nhà cung cấp VPS (Security Group / NSG).
+- Điền ô **Public URL** dạng `http://<IP-VPS-của-bạn>:8000` (nếu để mặc định port `8000` thì bắt buộc phải ghi `:8000` trong URL — bỏ port đi thì trình duyệt/TradingView sẽ mặc định gọi vào port `80`).
+- Không cần ngrok trong trường hợp này.
 
 ---
 
@@ -118,17 +123,32 @@ Tạo **2 Alert riêng** — một cho BUY, một cho SELL:
 
 > **Lưu ý:** Thay `your_token` bằng token bạn đã đặt trong phần mềm. Thay `XAUUSD` bằng symbol bạn muốn giao dịch.
 
+### Đóng lệnh theo tài khoản (TP/SL — alert dạng text)
+
+Dùng cho Alert báo "đã chạm TP/SL" — app sẽ tự đóng toàn bộ lệnh đang mở của symbol đó, chỉ trên (các) tài khoản MT5 (login) bạn chỉ định. Message **không phải JSON**, dán nguyên văn (TradingView tự điền `{{ticker}}` / `{{interval}}` / `{{close}}` khi kích hoạt):
+
+```
+✅ TP chốt lời | {{ticker}} | {{interval}} | Giá {{close}} || Account 123456
+❌ SL cắt lỗ   | {{ticker}} | {{interval}} | Giá {{close}} || Account 123456
+```
+
+Muốn đóng cùng lúc nhiều tài khoản bằng 1 alert, liệt kê login cách nhau bằng dấu phẩy:
+
+```
+✅ TP chốt lời | {{ticker}} | {{interval}} | Giá {{close}} || Account 123456, 234567
+```
+
 ---
 
 ## Các giá trị action hợp lệ
 
 | Action | Mô tả |
 |--------|-------|
-| `buy` | Đặt lệnh Buy |
-| `sell` | Đặt lệnh Sell |
+| `buy` | Đặt lệnh Buy. Nếu đang có lệnh Sell mở cho symbol đó, app tự đóng Sell trước rồi mở Buy mới (đảo chiều) |
+| `sell` | Đặt lệnh Sell. Nếu đang có lệnh Buy mở cho symbol đó, app tự đóng Buy trước rồi mở Sell mới (đảo chiều) |
 | `close` | Đóng tất cả lệnh đang mở của symbol đó |
 
----
+Nếu tín hiệu mới **cùng chiều** với lệnh đang mở (VD: đang Buy, tín hiệu Buy tiếp) → app bỏ qua, không mở thêm lệnh.
 
 ---
 
@@ -138,16 +158,18 @@ Nếu bạn muốn chạy trực tiếp từ source code thay vì dùng file `.e
 
 ### Yêu cầu thêm
 
-- Python 3.10+
+- Python 3.10+ (bản dùng để build hiện tại là 3.12)
 - pip
 
 ### Cài đặt
 
 ```bash
-git clone https://github.com/your-repo/algobot-tradingview
-cd algobot-tradingview
-pip install -r requirements.txt
+git clone https://github.com/trongkhoile/code-bridge.git
+cd code-bridge
+pip install -r requirements.txt pillow
 ```
+
+> Lưu ý: `pillow` không nằm trong `requirements.txt` nhưng bắt buộc phải có — `app.py` dùng nó để hiển thị logo, và bước build cũng dùng nó để tạo file icon (`logo.ico`).
 
 ### Chạy
 
@@ -163,6 +185,7 @@ python app.py
 ├── mt5_handler.py    # Kết nối và đặt lệnh MT5
 ├── requirements.txt  # Dependencies
 ├── settings.json     # Cài đặt (tự sinh khi chạy lần đầu)
+├── build.bat         # Script build ra file .exe (xem mục bên dưới)
 └── web/              # Source code website (React + TypeScript + Vite)
 ```
 
@@ -196,22 +219,61 @@ curl -X POST http://localhost:8000/webhook \
   -d "{\"token\":\"your_token\",\"symbol\":\"XAUUSD\",\"action\":\"buy\",\"lot\":0.01}"
 ```
 
-### Build ra file .exe
+### Build ra file .exe + đóng gói .zip
 
+Dự án đã có sẵn `build.bat` để tự động hoá toàn bộ bước build bằng PyInstaller — không cần tự gõ lệnh `pyinstaller` thủ công.
+
+**Yêu cầu trước khi build:**
 ```bash
-pip install pyinstaller
-pyinstaller --noconfirm --onedir --windowed --name "ALGOBOT-TradingView" ^
-  --icon "logo.ico" ^
-  --add-data "logo.png;." ^
-  --add-data "logo.ico;." ^
-  --collect-all customtkinter ^
-  --hidden-import MetaTrader5 ^
-  --hidden-import flask ^
-  --hidden-import werkzeug ^
-  app.py
+pip install -r requirements.txt pillow pyinstaller
+```
+(`pyinstaller` nếu chưa cài thì `build.bat` sẽ tự cài giúp bạn ở bước [1/3])
+
+Cần còn đủ dung lượng ổ đĩa trống — nên có tối thiểu **300–500 MB trống**. Quá trình build tạo ra thư mục `build\` (file tạm, ~25–70 MB), thư mục `dist\ALGOBOT-TradingView\` (app đã đóng gói, ~70 MB), và file zip cuối cùng (~30 MB). Nếu ổ đĩa gần đầy, build có thể báo lỗi giữa chừng hoặc file zip bị lỗi/thiếu.
+
+**Chạy build** (double-click `build.bat`, hoặc chạy qua terminal):
+
+PowerShell:
+```powershell
+.\build.bat
 ```
 
-Kết quả nằm trong `dist\ALGOBOT-TradingView\`.
+Git Bash:
+```bash
+./build.bat
+```
+
+Build mất khoảng 1–2 phút. Thấy dòng `Build xong! Thu muc: dist\ALGOBOT-TradingView` là thành công. Kết quả nằm ở `dist\ALGOBOT-TradingView\ALGOBOT-TradingView.exe`, chạy được ngay không cần cài Python.
+
+**Nén thành .zip để gửi khách:**
+
+Cách nhanh nhất: click phải thư mục `dist\ALGOBOT-TradingView` → **Send to** → **Compressed (zipped) folder**.
+
+Hoặc bằng lệnh (đảm bảo ghi đè bản cũ):
+
+PowerShell:
+```powershell
+if (Test-Path "dist\ALGOBOT-TradingView.zip") { Remove-Item "dist\ALGOBOT-TradingView.zip" -Force }
+Compress-Archive -Path "dist\ALGOBOT-TradingView" -DestinationPath "dist\ALGOBOT-TradingView.zip" -Force
+```
+
+Git Bash (không có sẵn lệnh `zip` nên gọi PowerShell ngay trong dòng lệnh):
+```bash
+rm -f "dist/ALGOBOT-TradingView.zip"
+powershell -NoProfile -Command "Compress-Archive -Path 'dist/ALGOBOT-TradingView' -DestinationPath 'dist/ALGOBOT-TradingView.zip' -Force"
+```
+
+**Lưu ý quan trọng:** mỗi khi sửa `app.py`, `server.py`, hoặc `mt5_handler.py`, file `.exe` cũ **không tự cập nhật** — phải build lại và nén lại zip mới trước khi gửi khách.
+
+**Sự cố thường gặp:**
+
+| Hiện tượng | Nguyên nhân / cách xử lý |
+|---|---|
+| Build báo lỗi thiếu module (`ModuleNotFoundError`) | Chạy lại `pip install -r requirements.txt pillow pyinstaller` |
+| Build dừng giữa chừng, không rõ lỗi | Kiểm tra dung lượng ổ đĩa còn trống, dọn bớt nếu gần đầy |
+| File zip bị thiếu / lỗi khi nén | Xóa file zip cũ trước khi nén, đảm bảo `dist\ALGOBOT-TradingView` đã build xong hoàn chỉnh |
+| Khách chạy `.exe` bị chặn | Do Windows SmartScreen/antivirus chặn file chưa có chữ ký số — hướng dẫn khách chọn "More info" → "Run anyway" |
+| Sửa code xong mà khách vẫn thấy bản cũ | Quên build lại và/hoặc quên xóa zip cũ trước khi nén |
 
 ### Website
 
