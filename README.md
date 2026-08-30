@@ -231,36 +231,39 @@ pip install -r requirements.txt pillow pyinstaller
 
 Cần còn đủ dung lượng ổ đĩa trống — nên có tối thiểu **300–500 MB trống**. Quá trình build tạo ra thư mục `build\` (file tạm, ~25–70 MB), thư mục `dist\ALGOBOT-TradingView\` (app đã đóng gói, ~70 MB), và file zip cuối cùng (~30 MB). Nếu ổ đĩa gần đầy, build có thể báo lỗi giữa chừng hoặc file zip bị lỗi/thiếu.
 
-**Chạy build** (double-click `build.bat`, hoặc chạy qua terminal):
+**Chạy build — chọn 1 trong 3 cách:**
 
-PowerShell:
+*Cách 1 — Double-click `build.bat`:* mở thư mục project → double-click file `build.bat` → cửa sổ CMD tự chạy `[1/3]` cài PyInstaller (nếu thiếu) → `[2/3]` tạo `logo.ico` → `[3/3]` build. Xong thì nhấn phím bất kỳ để đóng cửa sổ.
+
+*Cách 2 — PowerShell:*
 ```powershell
 .\build.bat
 ```
 
-Git Bash:
+*Cách 3 — Git Bash:*
 ```bash
 ./build.bat
 ```
+(Git Bash vẫn mở ra một cửa sổ CMD vì bản chất `build.bat` là batch script của Windows — bình thường, cứ để nó chạy xong rồi quay lại Git Bash.)
 
 Build mất khoảng 1–2 phút. Thấy dòng `Build xong! Thu muc: dist\ALGOBOT-TradingView` là thành công. Kết quả nằm ở `dist\ALGOBOT-TradingView\ALGOBOT-TradingView.exe`, chạy được ngay không cần cài Python.
 
-**Nén thành .zip để gửi khách:**
+**Nén thành .zip để gửi khách — chọn 1 trong 3 cách:**
 
-Cách nhanh nhất: click phải thư mục `dist\ALGOBOT-TradingView` → **Send to** → **Compressed (zipped) folder**.
+*Cách 1 — Dùng chuột (không cần lệnh):* vào thư mục `dist` → click phải thư mục `ALGOBOT-TradingView` → **Send to** → **Compressed (zipped) folder**.
 
-Hoặc bằng lệnh (đảm bảo ghi đè bản cũ):
-
-PowerShell:
+*Cách 2 — PowerShell (đảm bảo ghi đè bản cũ):*
 ```powershell
 if (Test-Path "dist\ALGOBOT-TradingView.zip") { Remove-Item "dist\ALGOBOT-TradingView.zip" -Force }
 Compress-Archive -Path "dist\ALGOBOT-TradingView" -DestinationPath "dist\ALGOBOT-TradingView.zip" -Force
+Get-Item "dist\ALGOBOT-TradingView.zip" | Select-Object FullName, @{N='SizeMB';E={[math]::Round($_.Length/1MB,2)}}, LastWriteTime
 ```
 
-Git Bash (không có sẵn lệnh `zip` nên gọi PowerShell ngay trong dòng lệnh):
+*Cách 3 — Git Bash* (không có sẵn lệnh `zip` nên gọi PowerShell ngay trong dòng lệnh, vẫn chạy được từ 1 cửa sổ Git Bash duy nhất):
 ```bash
 rm -f "dist/ALGOBOT-TradingView.zip"
 powershell -NoProfile -Command "Compress-Archive -Path 'dist/ALGOBOT-TradingView' -DestinationPath 'dist/ALGOBOT-TradingView.zip' -Force"
+ls -lh "dist/ALGOBOT-TradingView.zip"
 ```
 
 **Lưu ý quan trọng:** mỗi khi sửa `app.py`, `server.py`, hoặc `mt5_handler.py`, file `.exe` cũ **không tự cập nhật** — phải build lại và nén lại zip mới trước khi gửi khách.
