@@ -524,8 +524,10 @@ class App(ctk.CTk):
         section_label(tv_tab, "④ Đóng lệnh theo tài khoản  (TP/SL — không phải JSON)")
 
         close_note = (
-            'Dùng cho Alert báo "đã chạm TP/SL" — app sẽ tự đóng TOÀN BỘ lệnh đang mở\n'
-            'của symbol đó, CHỈ trên (các) tài khoản MT5 (login) bạn nhập bên dưới.\n'
+            'Dùng cho Alert báo "đã chạm TP/SL" — app sẽ đóng lệnh đang mở của symbol đó,\n'
+            'CHỈ đúng chiều lệnh (BUY/SELL) và CHỈ trên (các) tài khoản MT5 (login) bạn nhập\n'
+            'bên dưới. Kiểm tra chiều lệnh giúp tránh đóng nhầm lệnh mới nếu bị đảo chiều mà\n'
+            '2 tin nhắn đến sai thứ tự.\n'
             'Nhập nhiều tài khoản thì cách nhau bằng dấu phẩy — 1 alert đóng được nhiều account,\n'
             'y như lúc mở lệnh.'
         )
@@ -545,9 +547,10 @@ class App(ctk.CTk):
         close_cols.pack(fill="x")
         close_cols.columnconfigure((0, 1), weight=1, uniform="close")
 
-        def close_box(parent, label, color, col):
+        def close_box(parent, label, color, row, col):
             f = ctk.CTkFrame(parent, fg_color="transparent")
-            f.grid(row=0, column=col, sticky="ew", padx=(0 if col == 0 else 5, 0))
+            f.grid(row=row, column=col, sticky="ew",
+                   padx=(0 if col == 0 else 5, 0), pady=(0 if row == 0 else 8, 0))
             ctk.CTkLabel(f, text=label, font=("Segoe UI", 12, "bold"),
                          text_color=color).pack(anchor="w", pady=(0, 3))
             box = ctk.CTkTextbox(f, font=("Consolas", 10), height=60,
@@ -556,17 +559,20 @@ class App(ctk.CTk):
             copy_btn(f, lambda b=box: b.get("1.0", "end").strip()).pack(anchor="w")
             return box
 
-        self._close_tp_box = close_box(close_cols, "TP chốt lời", C_ACCENT, 0)
-        self._close_sl_box = close_box(close_cols, "SL cắt lỗ",   C_RED,    1)
+        self._close_buy_tp_box  = close_box(close_cols, "BUY — TP chốt lời",  C_ACCENT, 0, 0)
+        self._close_buy_sl_box  = close_box(close_cols, "BUY — SL cắt lỗ",    C_RED,    0, 1)
+        self._close_sell_tp_box = close_box(close_cols, "SELL — TP chốt lời", C_ACCENT, 1, 0)
+        self._close_sell_sl_box = close_box(close_cols, "SELL — SL cắt lỗ",   C_RED,    1, 1)
 
         self._close_account_var.trace_add("write", self._refresh_close_templates)
         self._refresh_close_templates()
 
         ctk.CTkLabel(tv_tab,
                      text=(
-                         "Cách dùng: tạo 2 Alert riêng trên TradingView cho điều kiện chạm TP và chạm SL,\n"
-                         "webhook URL dùng đúng URL ở mục ①, Message dán đúng nội dung ở trên (giữ nguyên,\n"
-                         "không sửa {{ticker}}/{{interval}}/{{close}} — TradingView tự điền khi kích hoạt)."
+                         "Cách dùng: tạo 4 Alert riêng trên TradingView — ứng với TP/SL của lệnh BUY\n"
+                         "và TP/SL của lệnh SELL, webhook URL dùng đúng URL ở mục ①, Message dán đúng\n"
+                         "nội dung tương ứng ở trên (giữ nguyên, không sửa {{ticker}}/{{interval}}/{{close}}\n"
+                         "— TradingView tự điền khi kích hoạt)."
                      ),
                      font=("Segoe UI", 10), text_color=C_HINT,
                      anchor="w", justify="left", wraplength=500).pack(fill="x", pady=(0, 4))
@@ -627,9 +633,18 @@ class App(ctk.CTk):
 
     def _refresh_close_templates(self, *_):
         acc = self._close_account_var.get().strip() or "123456"
-        tp_text = f"✅ TP chốt lời | {{{{ticker}}}} | {{{{interval}}}} | Giá {{{{close}}}} || Account {acc}"
-        sl_text = f"❌ SL cắt lỗ | {{{{ticker}}}} | {{{{interval}}}} | Giá {{{{close}}}} || Account {acc}"
-        for box, text in ((self._close_tp_box, tp_text), (self._close_sl_box, sl_text)):
+
+        def tpl(icon, kind, direction):
+            return (f"{icon} {kind} {direction} | {{{{ticker}}}} | {{{{interval}}}}"
+                    f" | Giá {{{{close}}}} || Account {acc}")
+
+        templates = (
+            (self._close_buy_tp_box,  tpl("✅", "TP chốt lời", "BUY")),
+            (self._close_buy_sl_box,  tpl("❌", "SL cắt lỗ",   "BUY")),
+            (self._close_sell_tp_box, tpl("✅", "TP chốt lời", "SELL")),
+            (self._close_sell_sl_box, tpl("❌", "SL cắt lỗ",   "SELL")),
+        )
+        for box, text in templates:
             box.configure(state="normal")
             box.delete("1.0", "end")
             box.insert("1.0", text)

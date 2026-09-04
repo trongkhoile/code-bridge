@@ -20,10 +20,12 @@ settings: dict = {
     "max_daily_profit": 0.0,
 }
 
-# Mẫu tin nhắn đóng lệnh theo tài khoản (không phải JSON), hỗ trợ 1 hoặc nhiều tài khoản:
-#   ✅ TP chốt lời | {{ticker}} | {{interval}} | Giá {{close}} || Account 123456
-#   ❌ SL cắt lỗ   | {{ticker}} | {{interval}} | Giá {{close}} || Account 123456, 234567
-_ACCOUNT_RE = re.compile(r"Account\s*[:\-]?\s*([\d][\d,\s]*)", re.IGNORECASE)
+# Mẫu tin nhắn đóng lệnh theo tài khoản (không phải JSON), hỗ trợ 1 hoặc nhiều tài khoản
+# và có chỉ định chiều lệnh (BUY/SELL) để tránh đóng nhầm lệnh mới khi bị đảo chiều:
+#   ✅ TP chốt lời BUY  | {{ticker}} | {{interval}} | Giá {{close}} || Account 123456
+#   ❌ SL cắt lỗ SELL   | {{ticker}} | {{interval}} | Giá {{close}} || Account 123456, 234567
+_ACCOUNT_RE   = re.compile(r"Account\s*[:\-]?\s*([\d][\d,\s]*)", re.IGNORECASE)
+_DIRECTION_RE = re.compile(r"\b(BUY|SELL)\b", re.IGNORECASE)
 
 
 def _dispatch_order(order_params: dict) -> tuple:
@@ -55,6 +57,7 @@ def _dispatch_order(order_params: dict) -> tuple:
             tp=order_params.get("tp", 0.0), comment=order_params.get("comment", "TradingView"),
             max_daily_loss=order_params.get("max_daily_loss", 0.0),
             max_daily_profit=order_params.get("max_daily_profit", 0.0),
+            close_direction=order_params.get("close_direction"),
         )
         if not result["success"]:
             logger.error(f"Đặt lệnh thất bại: {result}")
@@ -87,12 +90,19 @@ def _handle_text_close_alert(text: str):
         return None
     symbol = fields[1]
 
-    logger.info(f"Webhook (text) nhận: {kind} {symbol} -> đóng lệnh Account {logins}")
+    m_dir = _DIRECTION_RE.search(fields[0])
+    direction = m_dir.group(1).lower() if m_dir else None
+
+    logger.info(
+        f"Webhook (text) nhận: {kind} {direction.upper() if direction else '?'} {symbol}"
+        f" -> đóng lệnh Account {logins}"
+    )
 
     order_params = {
         "symbol": symbol, "action": "close", "lot": 0.0,
         "comment": f"{kind} auto-close",
         "target_accounts": logins,
+        "close_direction": direction,
     }
     return _dispatch_order(order_params)
 

@@ -130,6 +130,7 @@ def place_order(
     comment: str = "TradingView",
     max_daily_loss: float = 0.0,
     max_daily_profit: float = 0.0,
+    close_direction: str = None,
 ) -> dict:
     if not _ensure_symbol(symbol):
         return {"success": False, "error": f"Không tìm thấy symbol: {symbol}"}
@@ -140,7 +141,7 @@ def place_order(
     elif action_lower == "sell":
         order_type = mt5.ORDER_TYPE_SELL
     elif action_lower == "close":
-        return close_all_positions(symbol, comment)
+        return close_all_positions(symbol, comment, direction=close_direction)
     else:
         return {"success": False, "error": f"Action không hợp lệ: {action}"}
 
@@ -197,9 +198,21 @@ def place_order(
     }
 
 
-def _close_symbol_positions(mt5_mod, symbol: str, magic: int, comment: str) -> tuple:
-    """Đóng toàn bộ lệnh đang mở của 1 symbol. Trả về (số lệnh đã đóng, list lỗi)."""
+def _close_symbol_positions(mt5_mod, symbol: str, magic: int, comment: str, direction: str = None) -> tuple:
+    """
+    Đóng lệnh đang mở của 1 symbol. Nếu có `direction` ("buy"/"sell"), CHỈ đóng đúng
+    chiều đó — dùng để tránh tín hiệu đóng lệnh cũ đến trễ (do TradingView không đảm
+    bảo thứ tự webhook) lỡ đóng nhầm lệnh mới đã được đảo chiều mở ra sau đó.
+    Trả về (số lệnh đã đóng, list lỗi).
+    """
     positions = mt5_mod.positions_get(symbol=symbol)
+    if not positions:
+        return 0, []
+
+    if direction == "buy":
+        positions = [p for p in positions if p.type == mt5_mod.ORDER_TYPE_BUY]
+    elif direction == "sell":
+        positions = [p for p in positions if p.type == mt5_mod.ORDER_TYPE_SELL]
     if not positions:
         return 0, []
 
@@ -235,8 +248,8 @@ def _close_symbol_positions(mt5_mod, symbol: str, magic: int, comment: str) -> t
     return closed, errors
 
 
-def close_all_positions(symbol: str, comment: str = "close") -> dict:
-    closed, errors = _close_symbol_positions(mt5, symbol, _magic_number, comment)
+def close_all_positions(symbol: str, comment: str = "close", direction: str = None) -> dict:
+    closed, errors = _close_symbol_positions(mt5, symbol, _magic_number, comment, direction)
     if closed == 0 and not errors:
         return {"success": True, "closed": 0, "message": "Không có lệnh đang mở"}
     return {"success": len(errors) == 0, "closed": closed, "errors": errors}
@@ -306,7 +319,8 @@ def _order_worker(args: dict) -> dict:
             fill = _mt5.ORDER_FILLING_RETURN
 
         if action == "close":
-            closed, errors = _close_symbol_positions(_mt5, symbol, magic, comment)
+            close_direction = args.get("close_direction")
+            closed, errors = _close_symbol_positions(_mt5, symbol, magic, comment, close_direction)
             return {"success": len(errors) == 0, "name": name, "login": login, "closed": closed}
 
         if action == "buy":
