@@ -1,0 +1,2420 @@
+//@version=6
+indicator(
+     "DAO LENH STRATEGY",
+     overlay = true,
+     max_lines_count = 500,
+     max_labels_count = 500
+)
+
+//==================================================
+// 1. VWAP
+//==================================================
+source = input.source(hlc3, "Nguồn giá", group = "1. VWAP")
+
+//==================================================
+// 2. TÍN HIỆU VÀ ĐẢO LỆNH
+//==================================================
+showBuySignal = input.bool(
+     true,
+     "Hiển thị tín hiệu Buy",
+     group = "2. Tín hiệu và đảo lệnh"
+)
+
+showSellSignal = input.bool(
+     true,
+     "Hiển thị tín hiệu Sell",
+     group = "2. Tín hiệu và đảo lệnh"
+)
+
+enableReversal = input.bool(
+     true,
+     "Bật đảo lệnh ngay khi nến tín hiệu đóng",
+     tooltip = "Đang Sell + xuất hiện Buy hợp lệ: đóng Sell và mở Buy ngay tại Close của nến Buy.\nĐang Buy + xuất hiện Sell hợp lệ: đóng Buy và mở Sell ngay tại Close của nến Sell.",
+     group = "2. Tín hiệu và đảo lệnh"
+)
+
+//==================================================
+// 3. STOP LOSS VÀ TAKE PROFIT
+//==================================================
+// Hệ số k được cố định và chạy ngầm, không hiển thị trong phần cài đặt.
+float k = 2.3
+
+showSLTPLines = input.bool(true, "Hiển thị đường SL và TP", group = "3. Stop Loss và Take Profit")
+
+sameBarPriority = input.string(
+     "Ưu tiên SL",
+     "Nếu cùng một nến chạm cả SL và TP",
+     options = ["Ưu tiên SL", "Ưu tiên TP"],
+     tooltip = "Dữ liệu OHLC không cho biết mức nào bị chạm trước. Ưu tiên SL là cách tính thận trọng hơn.",
+     group = "3. Stop Loss và Take Profit"
+)
+
+lineHistoryTrades = input.int(
+     80,
+     "Số lệnh giữ lại đường SL/TP",
+     minval = 0,
+     maxval = 200,
+     tooltip = "Giới hạn số lệnh lịch sử còn giữ đường SL/TP để tránh vượt giới hạn line của TradingView.",
+     group = "3. Stop Loss và Take Profit"
+)
+
+//==================================================
+// 4. THỜI GIAN GIAO DỊCH
+//==================================================
+startHour = input.int(6, "Giờ bắt đầu", minval = 0, maxval = 23, inline = "START", group = "4. Thời gian giao dịch")
+startMinute = input.int(0, "Phút bắt đầu", minval = 0, maxval = 59, inline = "START", group = "4. Thời gian giao dịch")
+endHour = input.int(3, "Giờ kết thúc", minval = 0, maxval = 23, inline = "END", group = "4. Thời gian giao dịch")
+endMinute = input.int(30, "Phút kết thúc", minval = 0, maxval = 59, inline = "END", group = "4. Thời gian giao dịch")
+
+sessionTimezone = input.string(
+     "Asia/Ho_Chi_Minh",
+     "Múi giờ giao dịch",
+     tooltip = "Ví dụ: Asia/Ho_Chi_Minh, Asia/Bangkok, UTC.",
+     group = "4. Thời gian giao dịch"
+)
+
+//==================================================
+// 5. TÍNH TIỀN LÃI/LỖ
+//==================================================
+lotSize = 0.01
+
+moneyPerPriceUnitAtOneLot = input.float(
+     100.0,
+     "Giá trị tiền của 1.0 giá tại 1 lot",
+     minval = 0.000001,
+     step = 1.0,
+     tooltip = "XAUUSD phổ biến: 100. Với 0.01 lot, giá chạy 1.0 tương đương khoảng 1 USD.",
+     group = "5. Tính tiền lãi/lỗ"
+)
+
+currencySymbol = input.string("$", "Ký hiệu tiền", group = "5. Tính tiền lãi/lỗ")
+currencyText = input.string("USD", "Đơn vị tiền", group = "5. Tính tiền lãi/lỗ")
+showResultLabels = input.bool(
+     true,
+     "Hiển thị kết quả SL/TP/Hết giờ/Đảo lệnh",
+     group = "5. Tính tiền lãi/lỗ"
+)
+
+resultLabelAtrOffset = input.float(
+     0.45,
+     "Khoảng cách nhãn kết quả theo ATR",
+     minval = 0.15,
+     maxval = 2.0,
+     step = 0.05,
+     tooltip = "Nhãn SL/TP/Hết giờ được tự đẩy ra ngoài High/Low của nến. Giá trị lớn hơn sẽ đặt nhãn xa nến hơn.",
+     group = "5. Tính tiền lãi/lỗ"
+)
+
+showRunningPnlLabel = input.bool(
+     true,
+     "Hiển thị lãi/lỗ đang chạy",
+     tooltip = "Hiển thị một nhãn động bên phải cây nến hiện tại. Nhãn đi theo giá Close thời gian thực và tự đổi xanh/đỏ theo lãi/lỗ.",
+     group = "5. Tính tiền lãi/lỗ"
+)
+
+runningPnlLabelBarOffset = input.int(
+     1,
+     "Nhãn lãi/lỗ cách nến (bar)",
+     minval = 1,
+     maxval = 5,
+     tooltip = "Khoảng cách theo chiều ngang giữa nhãn lãi/lỗ đang chạy và cây nến hiện tại.",
+     group = "5. Tính tiền lãi/lỗ"
+)
+//==================================================
+// 6. ALERT RIÊNG BUY / SELL / SL / TP CHO TV-MT5 ROUTER
+//==================================================
+enableRouterAlerts = input.bool(
+     true,
+     "Bật 4 Alert BUY / SELL / SL / TP",
+     tooltip = "Tạo 4 Alert riêng trên TradingView từ các alertcondition của indicator. Không dùng Any alert() function call.",
+     group = "6. Alert TV-MT5 Router"
+)
+
+sendSessionEndClose = input.bool(
+     true,
+     "Hết giờ: dùng Alert SL để CLOSE",
+     tooltip = "Nếu bật, lệnh đóng vì hết giờ sẽ kích hoạt cùng Alert SL với reason = SL để Router đóng vị thế.",
+     group = "6. Alert TV-MT5 Router"
+)
+
+//==================================================
+// 7. BẢNG THỐNG KÊ GỘP
+//==================================================
+// Tắt toàn bộ bảng biểu trên biểu đồ.
+bool showStatsTable = false
+
+bool showDailyTable = false
+
+bool showMonthlyTable = false
+
+string statsTitle = "CÁ MẬP VÀNG"
+
+int yearsToShow = 5
+
+string panelScaleInput = "Vừa"
+
+string panelPositionInput = "Dưới trái"
+
+panelPosition = switch panelPositionInput
+    "Trên trái" => position.top_left
+    "Trên giữa" => position.top_center
+    "Trên phải" => position.top_right
+    "Giữa trái" => position.middle_left
+    "Giữa phải" => position.middle_right
+    "Dưới trái" => position.bottom_left
+    "Dưới giữa" => position.bottom_center
+    => position.bottom_right
+
+panelBodySize =
+     panelScaleInput == "Lớn" ?
+     size.normal :
+     panelScaleInput == "Vừa" ?
+     size.small :
+     size.tiny
+
+panelHeaderSize =
+     panelScaleInput == "Lớn" ?
+     size.normal :
+     panelScaleInput == "Vừa" ?
+     size.small :
+     size.tiny
+
+panelEmphasisSize =
+     panelScaleInput == "Lớn" ?
+     size.large :
+     panelScaleInput == "Vừa" ?
+     size.normal :
+     size.small
+
+//==================================================
+// 7. HÀM PHỤ
+//==================================================
+f_sessionEnd(
+     int _barTime,
+     int _startHour,
+     int _startMinute,
+     int _endHour,
+     int _endMinute,
+     string _timezone
+ ) =>
+    int localYear = year(_barTime, _timezone)
+    int localMonth = month(_barTime, _timezone)
+    int localDay = dayofmonth(_barTime, _timezone)
+
+    int startToday = timestamp(_timezone, localYear, localMonth, localDay, _startHour, _startMinute)
+    int endToday = timestamp(_timezone, localYear, localMonth, localDay, _endHour, _endMinute)
+    int endTomorrow = timestamp(_timezone, localYear, localMonth, localDay + 1, _endHour, _endMinute)
+
+    int startTotalMinutes = _startHour * 60 + _startMinute
+    int endTotalMinutes = _endHour * 60 + _endMinute
+    int calculatedEnd = na
+
+    if startTotalMinutes < endTotalMinutes
+        if _barTime >= startToday and _barTime < endToday
+            calculatedEnd := endToday
+    else if startTotalMinutes > endTotalMinutes
+        if _barTime >= startToday
+            calculatedEnd := endTomorrow
+        else if _barTime < endToday
+            calculatedEnd := endToday
+    else
+        calculatedEnd := _barTime >= startToday ? endTomorrow : endToday
+
+    calculatedEnd
+
+f_getTradingDateTimestamp(
+     int _ts,
+     int _startHour,
+     int _startMinute,
+     int _endHour,
+     int _endMinute,
+     string _timezone
+ ) =>
+    int startTotalMinutes = _startHour * 60 + _startMinute
+    int endTotalMinutes = _endHour * 60 + _endMinute
+    int currentMinutes = hour(_ts, _timezone) * 60 + minute(_ts, _timezone)
+
+    int adjustedTimestamp = _ts
+
+    if startTotalMinutes > endTotalMinutes and currentMinutes < endTotalMinutes
+        adjustedTimestamp := _ts - 24 * 60 * 60 * 1000
+
+    adjustedTimestamp
+
+f_getTradingDayKey(
+     int _ts,
+     int _startHour,
+     int _startMinute,
+     int _endHour,
+     int _endMinute,
+     string _timezone
+ ) =>
+    int tradingTimestamp = f_getTradingDateTimestamp(_ts, _startHour, _startMinute, _endHour, _endMinute, _timezone)
+    year(tradingTimestamp, _timezone) * 10000 + month(tradingTimestamp, _timezone) * 100 + dayofmonth(tradingTimestamp, _timezone)
+
+f_getTradingMonthKey(
+     int _ts,
+     int _startHour,
+     int _startMinute,
+     int _endHour,
+     int _endMinute,
+     string _timezone
+ ) =>
+    int tradingTimestamp = f_getTradingDateTimestamp(_ts, _startHour, _startMinute, _endHour, _endMinute, _timezone)
+    year(tradingTimestamp, _timezone) * 100 + month(tradingTimestamp, _timezone)
+
+f_money(float _value) =>
+    string result = "—"
+    if not na(_value)
+        if _value > 0
+            result := "+" + currencySymbol + str.tostring(_value, "#.##")
+        else if _value < 0
+            result := "-" + currencySymbol + str.tostring(math.abs(_value), "#.##")
+        else
+            result := currencySymbol + "0.00"
+    result
+
+// Với alertcondition(), JSON được đặt cố định trong Message của từng Alert.
+// API key / channel / symbol có thể chỉnh trực tiếp trong ô Message khi tạo Alert trên TradingView.
+
+profitColor = color.rgb(0, 235, 160)
+lossColor = color.rgb(255, 55, 88)
+warningColor = color.rgb(255, 193, 7)
+textColor = color.rgb(235, 238, 245)
+mutedColor = color.rgb(145, 150, 165)
+headerBg = color.rgb(28, 9, 48)
+rowBg1 = color.rgb(16, 21, 32)
+rowBg2 = color.rgb(21, 26, 39)
+totalBg = color.rgb(34, 9, 55)
+
+f_pnlColor(float _value) =>
+    color result = mutedColor
+    if not na(_value)
+        result := _value > 0 ? profitColor : _value < 0 ? lossColor : mutedColor
+    result
+
+separatorBg = color.rgb(8, 12, 22)
+
+f_panelCell(
+     table _table,
+     int _column,
+     int _row,
+     string _text,
+     color _textColor,
+     color _bgColor,
+     string _alignment,
+     string _textSize,
+     int _width
+ ) =>
+
+    table.cell(
+         _table,
+         _column,
+         _row,
+         _text,
+         width = _width,
+         text_color = _textColor,
+         bgcolor = _bgColor,
+         text_halign =
+             _alignment == "left" ?
+             text.align_left :
+             _alignment == "center" ?
+             text.align_center :
+             text.align_right,
+         text_valign = text.align_center,
+         text_size = _textSize
+    )
+
+//==================================================
+// 8. XÁC ĐỊNH PHIÊN GIAO DỊCH
+//==================================================
+sessionEndForCurrentBar = f_sessionEnd(time, startHour, startMinute, endHour, endMinute, sessionTimezone)
+barStartsInsideSession = not na(sessionEndForCurrentBar)
+entryTimeAllowed = barStartsInsideSession and not na(time_close) and time_close < sessionEndForCurrentBar
+
+//==================================================
+// 9. VWAP, UPPER 1, LOWER 1 VÀ ATR(5)
+//==================================================
+newDay = timeframe.change("1D")
+[vwapValue, upper1, lower1] = ta.vwap(source, newDay, 1.0)
+atr5 = ta.atr(5)
+
+//==================================================
+// 10. LOGIC BUY/SELL
+//==================================================
+rawBuySignal =
+     barstate.isconfirmed and
+     entryTimeAllowed and
+     not na(vwapValue) and
+     open > vwapValue and
+     low < vwapValue and
+     close > vwapValue
+
+previousRawBuy = bar_index > 0 ? rawBuySignal[1] : false
+buySignal = rawBuySignal and not previousRawBuy
+
+rawSellSignal =
+     barstate.isconfirmed and
+     entryTimeAllowed and
+     not na(vwapValue) and
+     open < vwapValue and
+     high > vwapValue and
+     close < vwapValue
+
+previousRawSell = bar_index > 0 ? rawSellSignal[1] : false
+sellSignal = rawSellSignal and not previousRawSell
+
+//==================================================
+// 11. HIỂN THỊ VWAP VÀ CÁC DẢI
+//==================================================
+color bandPurple = color.rgb(156, 39, 176)
+
+plot(vwapValue, title = "VWAP", color = color.yellow, linewidth = 4)
+
+//==================================================
+// 12. BIẾN QUẢN LÝ LỆNH
+//==================================================
+var int tradeDirection = 0
+var int entryBar = na
+var int entryTimestamp = na
+var float entryPrice = na
+var float stopPrice = na
+var float takePrice = na
+var int tradeCutoffTime = na
+var line stopLine = na
+var line takeLine = na
+var label runningPnlLabel = na
+var array<line> storedTradeLines = array.new_line(0)
+
+// Lưu chiều của lệnh vừa đóng gần nhất, dùng để tách alert SL/TP
+// theo đúng chiều BUY/SELL (đọc ở mục 19.1).
+var int lastClosedDirection = 0
+
+// Tự xếp tầng nhãn kết quả khi nhiều lệnh đóng gần nhau,
+// tránh các nhãn SL/TP chồng lên nhau.
+var int lastAboveResultLabelBar = na
+var int lastBelowResultLabelBar = na
+var int aboveResultLabelStack = 0
+var int belowResultLabelStack = 0
+
+tradeWasOpenAtBarStart = tradeDirection != 0
+
+//==================================================
+// 13. BIẾN THỐNG KÊ LỊCH SỬ
+//==================================================
+var int firstDataTime = na
+if na(firstDataTime)
+    firstDataTime := time
+
+var int totalTrades = 0
+var int tpTrades = 0
+var int slTrades = 0
+var int timeExitTrades = 0
+
+var float totalNetProfit = 0.0
+
+// Max Equity Drawdown theo mô hình VỐN GỐC KHÔNG DÙNG LỢI NHUẬN DƯƠNG LÀM ĐỆM.
+//
+// riskReservePnl là P/L vốn rủi ro đã chốt, luôn <= 0:
+//   - Lệnh lỗ: cộng toàn bộ lỗ vào riskReservePnl.
+//   - Lệnh thắng: chỉ được dùng để phục hồi phần vốn đã mất về tối đa 0.
+//   - Phần lợi nhuận vượt 0 bị bỏ qua, KHÔNG được tích lũy làm bộ đệm cho lệnh sau.
+//
+// Nhờ đó một chuỗi lỗ mới luôn phải được chính VỐN GỐC chịu đựng,
+// không thể được "che" bởi lợi nhuận dương đã kiếm trước đó.
+// Max Equity DD = trị tuyệt đối của mức Equity rủi ro âm sâu nhất,
+// bao gồm cả Floating P/L intrabar của khối lượng 0.01 lot.
+var float maxEquityDrawdown = 0.0
+var float riskReservePnl = 0.0
+
+var float bestWinningTrade = na
+var float worstLosingTrade = na
+
+var int currentWinStreak = 0
+var float currentWinStreakProfit = 0.0
+var int maxWinStreak = 0
+var float maxWinStreakProfit = 0.0
+
+var int currentLossStreak = 0
+var float currentLossStreakProfit = 0.0
+var int maxLossStreak = 0
+var float maxLossStreakProfit = 0.0
+
+var array<int> pnlYears = array.new_int(0)
+var array<float> pnlByYear = array.new_float(0)
+
+// Dữ liệu chi tiết theo ngày và theo tháng.
+// Khóa ngày: YYYYMMDD. Khóa tháng: YYYYMM.
+var array<int> dailyKeys = array.new_int(0)
+var array<int> dailyTradeCounts = array.new_int(0)
+var array<float> dailyProfits = array.new_float(0)
+
+var array<int> monthlyKeys = array.new_int(0)
+var array<int> monthlyTradeCounts = array.new_int(0)
+var array<float> monthlyProfits = array.new_float(0)
+
+// Danh sách các ngày và tháng giao dịch thực tế trong dữ liệu đã tải.
+// Với phiên qua đêm, phần nến sau 00:00 đến giờ kết thúc được quy về
+// ngày giao dịch bắt đầu ở ngày liền trước.
+var array<int> tradingDayKeys = array.new_int(0)
+var int latestTradingMonthKey = na
+
+if barStartsInsideSession
+    int loadedTradingDayKey = f_getTradingDayKey(time, startHour, startMinute, endHour, endMinute, sessionTimezone)
+    int loadedTradingMonthKey = int(math.floor(loadedTradingDayKey / 100.0))
+
+    if array.indexof(tradingDayKeys, loadedTradingDayKey) == -1
+        array.push(tradingDayKeys, loadedTradingDayKey)
+
+    // Chỉ bắt đầu hiển thị tháng mới khi phiên giao dịch đầu tiên
+    // của tháng đó thực sự đã mở cửa.
+    if array.indexof(monthlyKeys, loadedTradingMonthKey) == -1
+        array.push(monthlyKeys, loadedTradingMonthKey)
+        array.push(monthlyTradeCounts, 0)
+        array.push(monthlyProfits, 0.0)
+
+    latestTradingMonthKey := loadedTradingMonthKey
+
+// Đồng bộ ngày/tháng hiển thị theo phiên đang chạy ở thời điểm hiện tại.
+// Khối này dùng cho cây nến cuối, không phụ thuộc việc đã có lệnh trong tháng mới.
+if barstate.islast
+    int liveSessionEnd = f_sessionEnd(timenow, startHour, startMinute, endHour, endMinute, sessionTimezone)
+    if not na(liveSessionEnd)
+        int liveTradingDayKey = f_getTradingDayKey(timenow, startHour, startMinute, endHour, endMinute, sessionTimezone)
+        int liveTradingMonthKey = int(math.floor(liveTradingDayKey / 100.0))
+
+        if array.indexof(tradingDayKeys, liveTradingDayKey) == -1
+            array.push(tradingDayKeys, liveTradingDayKey)
+
+        if array.indexof(monthlyKeys, liveTradingMonthKey) == -1
+            array.push(monthlyKeys, liveTradingMonthKey)
+            array.push(monthlyTradeCounts, 0)
+            array.push(monthlyProfits, 0.0)
+
+        latestTradingMonthKey := liveTradingMonthKey
+
+f_getYearProfit(int _year) =>
+    int index = array.indexof(pnlYears, _year)
+    index >= 0 ? array.get(pnlByYear, index) : 0.0
+
+//==================================================
+// 14. KIỂM TRA ĐÓNG LỆNH / ĐẢO LỆNH
+//==================================================
+bool exitNow = false
+bool hitStopLoss = false
+bool hitTakeProfit = false
+bool reverseSellToBuySignal = false
+bool reverseBuyToSellSignal = false
+bool enterReverseBuy = false
+bool enterReverseSell = false
+
+float exitPrice = na
+string exitReason = ""
+int exitTimestamp = na
+int reverseDirection = 0
+
+// Chỉ quản lý SL/TP từ cây nến SAU cây nến vào lệnh.
+// Vì vậy, lệnh đảo mở tại Close của nến tín hiệu sẽ không thể
+// bị SL/TP bởi phần giá đã xảy ra trước thời điểm vào lệnh.
+if barstate.isconfirmed and tradeWasOpenAtBarStart and bar_index > entryBar
+    bool cutoffPassedBeforeCurrentBar =
+         not na(tradeCutoffTime) and
+         time >= tradeCutoffTime
+
+    bool cutoffReachedByBarClose =
+         not na(tradeCutoffTime) and
+         not na(time_close) and
+         time_close >= tradeCutoffTime
+
+    if cutoffPassedBeforeCurrentBar
+        exitNow := true
+        exitPrice := open
+        exitReason := "HẾT GIỜ"
+        exitTimestamp := tradeCutoffTime
+
+    else
+        // TP động theo Upper 1/Lower 1 của chính nến hiện tại.
+        takePrice := tradeDirection == 1 ? upper1 : lower1
+
+        if showSLTPLines and not na(takeLine) and not na(takePrice)
+            line.set_xy1(takeLine, bar_index, takePrice)
+            line.set_xy2(takeLine, bar_index + 1, takePrice)
+            line.set_extend(takeLine, extend.right)
+
+        if tradeDirection == 1
+            hitStopLoss := low <= stopPrice
+            hitTakeProfit := not na(upper1) and high >= upper1
+
+        else if tradeDirection == -1
+            hitStopLoss := high >= stopPrice
+            hitTakeProfit := not na(lower1) and low <= lower1
+
+        // Tín hiệu đảo chính là tín hiệu ĐỐI LẬP theo logic gốc.
+        // Sell đang mở + Buy hợp lệ  => đóng Sell và mở Buy tại Close.
+        // Buy đang mở  + Sell hợp lệ => đóng Buy và mở Sell tại Close.
+        bool canReverseSellToBuy =
+             enableReversal and
+             tradeDirection == -1 and
+             buySignal and
+             not na(atr5) and
+             not na(upper1) and
+             upper1 > close
+
+        bool canReverseBuyToSell =
+             enableReversal and
+             tradeDirection == 1 and
+             sellSignal and
+             not na(atr5) and
+             not na(lower1) and
+             lower1 < close
+
+        // SL/TP được ưu tiên. Nếu đã chạm trong nến thì lệnh cũ
+        // được xem là đã kết thúc trước khi có thể đảo tại Close.
+        if hitStopLoss and hitTakeProfit
+            if sameBarPriority == "Ưu tiên SL"
+                exitNow := true
+                exitPrice := stopPrice
+                exitReason := "SL"
+            else
+                exitNow := true
+                exitPrice := takePrice
+                exitReason := "TP"
+
+            exitTimestamp := time_close
+
+        else if hitStopLoss
+            exitNow := true
+            exitPrice := stopPrice
+            exitReason := "SL"
+            exitTimestamp := time_close
+
+        else if hitTakeProfit
+            exitNow := true
+            exitPrice := takePrice
+            exitReason := "TP"
+            exitTimestamp := time_close
+
+        else if cutoffReachedByBarClose
+            exitNow := true
+            exitPrice := close
+            exitReason := "HẾT GIỜ"
+            exitTimestamp := tradeCutoffTime
+
+        else if canReverseSellToBuy
+            exitNow := true
+            exitPrice := close
+            exitReason := "ĐẢO LỆNH"
+            exitTimestamp := time_close
+            reverseDirection := 1
+            reverseSellToBuySignal := true
+
+        else if canReverseBuyToSell
+            exitNow := true
+            exitPrice := close
+            exitReason := "ĐẢO LỆNH"
+            exitTimestamp := time_close
+            reverseDirection := -1
+            reverseBuyToSellSignal := true
+
+//==================================================
+// 14.1. MAX EQUITY DRAWDOWN 0.01 LOT - VỐN GỐC TỰ CHỊU RỦI RO
+//==================================================
+// MỤC TIÊU:
+// Tìm mức VỐN GỐC tối thiểu lịch sử cần để tài khoản không chạm 0,
+// mà KHÔNG cho lợi nhuận dương trước đó trở thành bộ đệm cho các lệnh lỗ sau.
+//
+// Quy ước:
+//   Equity rủi ro = riskReservePnl + Floating P/L của lệnh đang mở
+//   riskReservePnl luôn <= 0
+//   Mốc vốn gốc = 0 USD P/L
+//   Drawdown tại mọi thời điểm = max(0, -Equity rủi ro)
+//   Max Equity DD = mức thiếu vốn lớn nhất trên toàn bộ lịch sử.
+//
+// Lệnh thắng chỉ được phép phục hồi khoản vốn đã mất về 0.
+// Phần lợi nhuận vượt 0 bị bỏ qua ngay trong đường vốn rủi ro.
+// Vì vậy Max Equity DD không thể bị giảm giả tạo bởi lợi nhuận dương đã có trước chuỗi lỗ.
+//
+// Trên bar lịch sử, thứ tự intrabar được mô phỏng theo broker emulator:
+//   - Open gần High hơn: Open -> High -> Low -> Close
+//   - Ngược lại:         Open -> Low  -> High -> Close
+// Nếu lệnh đóng trong bar, equity chỉ được theo dõi đến đúng exitPrice.
+float closedPnlBeforeExit = riskReservePnl
+float pnlMultiplierForDd = moneyPerPriceUnitAtOneLot * lotSize
+
+// Cập nhật mức thiếu hụt vốn tại một điểm equity.
+// Chỉ phần Equity rủi ro < 0 mới tạo drawdown; phần dương không được tích lũy.
+if tradeWasOpenAtBarStart and not na(entryPrice)
+    float firstExtreme =
+         math.abs(open - high) < math.abs(open - low) ?
+         high :
+         low
+
+    float secondExtreme =
+         firstExtreme == high ?
+         low :
+         high
+
+    // Nếu bar mở cửa đã gap qua đúng mức SL/TP mà logic chiến lược
+    // vẫn khớp tại stopPrice/takePrice, phép tính Equity DD cũng dùng đúng
+    // giá khớp đó, không lấy Open nằm phía ngoài mức thoát.
+    bool selectedPriceExitOnBar =
+         exitNow and
+         (exitReason == "SL" or exitReason == "TP") and
+         not na(exitPrice)
+
+    bool selectedExitAlreadyBeyondOpen =
+         selectedPriceExitOnBar and
+         (
+             exitReason == "SL" ?
+             (tradeDirection == 1 ? open <= exitPrice : open >= exitPrice) :
+             (tradeDirection == 1 ? open >= exitPrice : open <= exitPrice)
+         )
+
+    float firstEquityObservedPrice =
+         selectedExitAlreadyBeyondOpen ?
+         exitPrice :
+         open
+
+    // Equity rủi ro tại điểm đầu tiên còn thuộc vị thế trong bar hiện tại.
+    float equityAtOpen =
+         closedPnlBeforeExit +
+         (firstEquityObservedPrice - entryPrice) * tradeDirection * pnlMultiplierForDd
+
+    maxEquityDrawdown := math.max(
+         maxEquityDrawdown,
+         math.max(-equityAtOpen, 0.0)
+    )
+
+    // Hết giờ ngay từ đầu bar: vị thế được xem là đóng tại Open.
+    // Gap qua SL/TP: vị thế được xem là đóng ngay tại exitPrice theo
+    // chính logic khớp lệnh hiện tại. Cả hai trường hợp đều không xét
+    // High/Low/Close phía sau.
+    bool equityExitAtOpen =
+         (
+             exitNow and
+             exitReason == "HẾT GIỜ" and
+             not na(tradeCutoffTime) and
+             time >= tradeCutoffTime
+         ) or
+         selectedExitAlreadyBeyondOpen
+
+    if not equityExitAtOpen
+        // Duyệt ba chặng intrabar: Open->Extreme1->Extreme2->Close.
+        // Khi chặng hiện tại cắt exitPrice, dừng chính xác tại exitPrice.
+        float pathPoint0 = open
+        float pathPoint1 = firstExtreme
+        float pathPoint2 = secondExtreme
+        float pathPoint3 = close
+        bool equityPathStopped = false
+
+        for pathSegment = 0 to 2
+            if not equityPathStopped
+                float segmentStart =
+                     pathSegment == 0 ? pathPoint0 :
+                     pathSegment == 1 ? pathPoint1 :
+                     pathPoint2
+
+                float segmentEnd =
+                     pathSegment == 0 ? pathPoint1 :
+                     pathSegment == 1 ? pathPoint2 :
+                     pathPoint3
+
+                bool selectedPriceExit =
+                     exitNow and
+                     (exitReason == "SL" or exitReason == "TP") and
+                     not na(exitPrice)
+
+                bool exitPriceInsideSegment =
+                     selectedPriceExit and
+                     exitPrice >= math.min(segmentStart, segmentEnd) and
+                     exitPrice <= math.max(segmentStart, segmentEnd)
+
+                float equityPathPrice =
+                     exitPriceInsideSegment ?
+                     exitPrice :
+                     segmentEnd
+
+                float equityPathValue =
+                     closedPnlBeforeExit +
+                     (equityPathPrice - entryPrice) * tradeDirection * pnlMultiplierForDd
+
+                maxEquityDrawdown := math.max(
+                     maxEquityDrawdown,
+                     math.max(-equityPathValue, 0.0)
+                )
+
+                if exitPriceInsideSegment
+                    equityPathStopped := true
+
+        // Hết giờ hoặc đảo lệnh được đóng tại Close. Các extreme trong bar
+        // vẫn thuộc thời gian lệnh còn mở, nên toàn bộ đường OHLC được xét.
+        // Với SL/TP, vòng lặp phía trên đã tự dừng tại exitPrice.
+
+else
+    // Khi không có lệnh mở từ đầu bar, Equity rủi ro = P/L vốn gốc đã chốt.
+    // riskReservePnl luôn <= 0 vì lợi nhuận vượt vốn gốc không được tích lũy.
+    float flatEquity = riskReservePnl
+    maxEquityDrawdown := math.max(
+         maxEquityDrawdown,
+         math.max(-flatEquity, 0.0)
+    )
+
+//==================================================
+// 15. XỬ LÝ, THỐNG KÊ VÀ MỞ LỆNH ĐẢO NGAY TẠI CLOSE
+//==================================================
+if exitNow
+    // Lưu hướng lệnh cũ trước khi reset.
+    int closedDirection = tradeDirection
+    int closedEntryTimestamp = entryTimestamp
+    lastClosedDirection := closedDirection
+
+    // Dừng đường SL của lệnh cũ.
+    if not na(stopLine)
+        line.set_x2(stopLine, bar_index)
+        line.set_extend(stopLine, extend.none)
+
+    // Dừng đường TP động của lệnh cũ.
+    if not na(takeLine) and not na(takePrice)
+        int takeLineStartBar = bar_index > 0 ? bar_index - 1 : bar_index
+        line.set_xy1(takeLine, takeLineStartBar, takePrice)
+        line.set_xy2(takeLine, bar_index, takePrice)
+        line.set_extend(takeLine, extend.none)
+
+    // Lưu một số đường lịch sử gần nhất.
+    if not na(stopLine)
+        array.push(storedTradeLines, stopLine)
+
+    if not na(takeLine)
+        array.push(storedTradeLines, takeLine)
+
+    int maxStoredLines = lineHistoryTrades * 2
+
+    while array.size(storedTradeLines) > maxStoredLines
+        line oldLine = array.shift(storedTradeLines)
+        line.delete(oldLine)
+
+    // P/L của lệnh vừa đóng.
+    float closedProfit =
+         (exitPrice - entryPrice) *
+         closedDirection *
+         moneyPerPriceUnitAtOneLot *
+         lotSize
+
+    //================================================
+    // CẬP NHẬT THỐNG KÊ
+    //================================================
+    totalTrades += 1
+
+    if exitReason == "TP"
+        tpTrades += 1
+
+    else if exitReason == "SL" or exitReason == "ĐẢO LỆNH"
+        // Lệnh đóng do đảo được xếp vào nhóm SL theo yêu cầu.
+        slTrades += 1
+
+    else if exitReason == "HẾT GIỜ"
+        timeExitTrades += 1
+
+    totalNetProfit += closedProfit
+
+    // Cập nhật đường VỐN RỦI RO.
+    // Lãi chỉ được dùng để phục hồi phần vốn đã mất về 0; phần vượt 0 bị bỏ qua.
+    // Nhờ đó lợi nhuận dương trước chuỗi lỗ không thể làm Max Equity DD nhỏ giả tạo.
+    riskReservePnl := math.min(0.0, riskReservePnl + closedProfit)
+
+    if closedProfit > 0
+        bestWinningTrade :=
+             na(bestWinningTrade) ?
+             closedProfit :
+             math.max(bestWinningTrade, closedProfit)
+
+        currentWinStreak += 1
+        currentWinStreakProfit += closedProfit
+        currentLossStreak := 0
+        currentLossStreakProfit := 0.0
+
+        if currentWinStreak > maxWinStreak or
+           (currentWinStreak == maxWinStreak and currentWinStreakProfit > maxWinStreakProfit)
+
+            maxWinStreak := currentWinStreak
+            maxWinStreakProfit := currentWinStreakProfit
+
+    else if closedProfit < 0
+        worstLosingTrade :=
+             na(worstLosingTrade) ?
+             closedProfit :
+             math.min(worstLosingTrade, closedProfit)
+
+        currentLossStreak += 1
+        currentLossStreakProfit += closedProfit
+        currentWinStreak := 0
+        currentWinStreakProfit := 0.0
+
+        if currentLossStreak > maxLossStreak or
+           (currentLossStreak == maxLossStreak and currentLossStreakProfit < maxLossStreakProfit)
+
+            maxLossStreak := currentLossStreak
+            maxLossStreakProfit := currentLossStreakProfit
+
+    else
+        currentWinStreak := 0
+        currentWinStreakProfit := 0.0
+        currentLossStreak := 0
+        currentLossStreakProfit := 0.0
+
+    // Lợi nhuận theo năm được ghi nhận theo thời điểm thoát lệnh.
+    if not na(exitTimestamp)
+        int exitYear = year(exitTimestamp, sessionTimezone)
+        int yearIndex = array.indexof(pnlYears, exitYear)
+
+        if yearIndex == -1
+            array.push(pnlYears, exitYear)
+            array.push(pnlByYear, closedProfit)
+        else
+            array.set(
+                 pnlByYear,
+                 yearIndex,
+                 array.get(pnlByYear, yearIndex) + closedProfit
+            )
+
+    // Bảng ngày/tháng được ghi nhận theo NGÀY GIAO DỊCH của Entry.
+    int aggregateTimestamp =
+         not na(closedEntryTimestamp) ?
+         closedEntryTimestamp :
+         exitTimestamp
+
+    if not na(aggregateTimestamp)
+        int dayKey = f_getTradingDayKey(
+             aggregateTimestamp,
+             startHour,
+             startMinute,
+             endHour,
+             endMinute,
+             sessionTimezone
+        )
+
+        int monthKey = int(math.floor(dayKey / 100.0))
+        int dayIndex = array.indexof(dailyKeys, dayKey)
+
+        if dayIndex == -1
+            array.push(dailyKeys, dayKey)
+            array.push(dailyTradeCounts, 1)
+            array.push(dailyProfits, closedProfit)
+        else
+            array.set(
+                 dailyTradeCounts,
+                 dayIndex,
+                 array.get(dailyTradeCounts, dayIndex) + 1
+            )
+
+            array.set(
+                 dailyProfits,
+                 dayIndex,
+                 array.get(dailyProfits, dayIndex) + closedProfit
+            )
+
+        int monthIndex = array.indexof(monthlyKeys, monthKey)
+
+        if monthIndex == -1
+            array.push(monthlyKeys, monthKey)
+            array.push(monthlyTradeCounts, 1)
+            array.push(monthlyProfits, closedProfit)
+        else
+            array.set(
+                 monthlyTradeCounts,
+                 monthIndex,
+                 array.get(monthlyTradeCounts, monthIndex) + 1
+            )
+
+            array.set(
+                 monthlyProfits,
+                 monthIndex,
+                 array.get(monthlyProfits, monthIndex) + closedProfit
+            )
+
+    //================================================
+    // NHÃN KẾT QUẢ: TỰ ĐẨY RA NGOÀI NẾN
+    //================================================
+    string moneySign =
+         closedProfit > 0 ?
+         "+" :
+         closedProfit < 0 ?
+         "-" :
+         ""
+
+    string moneyValue = str.tostring(math.abs(closedProfit), "#.##")
+
+    string displayExitReason =
+         exitReason == "ĐẢO LỆNH" ?
+         "Đảo lệnh SL" :
+         exitReason
+
+    // Nhãn đóng lệnh chỉ hiển thị lý do, không hiển thị số tiền.
+    string resultText = displayExitReason
+
+    color resultColor =
+         closedProfit > 0 ?
+         profitColor :
+         closedProfit < 0 ?
+         lossColor :
+         mutedColor
+
+    // Tự tính khoảng cách theo ATR và biên độ nến.
+    float candleRange = math.max(high - low, syminfo.mintick)
+    float labelAtrBase = na(atr5) ? candleRange : atr5
+
+    float resultLabelDistance = math.max(
+         math.max(
+             labelAtrBase * resultLabelAtrOffset,
+             candleRange * 0.35
+         ),
+         syminfo.mintick * 20.0
+    )
+
+    // TP đặt về phía có lợi; SL đặt về phía bất lợi.
+    // Với đảo lệnh: nhãn đóng lệnh cũ đặt đối diện nhãn Entry mới,
+    // nhờ đó hai nhãn không chồng lên nhau.
+    bool resultLabelAbove = false
+
+    if exitReason == "TP"
+        resultLabelAbove := closedDirection == 1
+
+    else if exitReason == "SL"
+        resultLabelAbove := closedDirection == -1
+
+    else if exitReason == "ĐẢO LỆNH"
+        resultLabelAbove := closedDirection == -1
+
+    else
+        resultLabelAbove :=
+             closedProfit >= 0 ?
+             closedDirection == 1 :
+             closedDirection == -1
+
+    // Nếu nhiều nhãn cùng phía xuất hiện trong 2 nến gần nhau,
+    // tự đẩy nhãn sau ra xa hơn theo từng tầng.
+    if resultLabelAbove
+        if not na(lastAboveResultLabelBar) and bar_index - lastAboveResultLabelBar <= 2
+            aboveResultLabelStack := math.min(aboveResultLabelStack + 1, 3)
+        else
+            aboveResultLabelStack := 0
+
+        resultLabelDistance := resultLabelDistance * (1.0 + aboveResultLabelStack * 0.55)
+        lastAboveResultLabelBar := bar_index
+
+    else
+        if not na(lastBelowResultLabelBar) and bar_index - lastBelowResultLabelBar <= 2
+            belowResultLabelStack := math.min(belowResultLabelStack + 1, 3)
+        else
+            belowResultLabelStack := 0
+
+        resultLabelDistance := resultLabelDistance * (1.0 + belowResultLabelStack * 0.55)
+        lastBelowResultLabelBar := bar_index
+
+    float resultLabelY =
+         resultLabelAbove ?
+         high + resultLabelDistance :
+         low - resultLabelDistance
+
+    if showResultLabels
+        label.new(
+             x = bar_index,
+             y = resultLabelY,
+             text = resultText,
+             xloc = xloc.bar_index,
+             yloc = yloc.price,
+             style =
+                 resultLabelAbove ?
+                 label.style_label_down :
+                 label.style_label_up,
+             color = resultColor,
+             textcolor = color.white,
+             size = size.small
+        )
+
+    // Lưu text để dùng cho cảnh báo.
+    string closedResultAlert =
+         displayExitReason +
+         " | " +
+         syminfo.ticker +
+         " | " +
+         moneySign +
+         currencySymbol +
+         moneyValue +
+         " " +
+         currencyText +
+         " | Giá thoát: " +
+         str.tostring(exitPrice, format.mintick)
+
+    //================================================
+    // RESET LỆNH CŨ
+    //================================================
+    tradeDirection := 0
+    entryBar := na
+    entryTimestamp := na
+    entryPrice := na
+    stopPrice := na
+    takePrice := na
+    tradeCutoffTime := na
+    stopLine := na
+    takeLine := na
+
+    //================================================
+    // MỞ LỆNH ĐẢO NGAY TẠI CLOSE CỦA NẾN TÍN HIỆU
+    //================================================
+    if reverseDirection != 0 and enableReversal
+        tradeDirection := reverseDirection
+        entryBar := bar_index
+        entryTimestamp := na(time_close) ? time : time_close
+        entryPrice := close
+        stopPrice :=
+             tradeDirection == 1 ?
+             entryPrice - k * atr5 :
+             entryPrice + k * atr5
+
+        takePrice :=
+             tradeDirection == 1 ?
+             upper1 :
+             lower1
+
+        tradeCutoffTime := sessionEndForCurrentBar
+
+        enterReverseBuy := tradeDirection == 1
+        enterReverseSell := tradeDirection == -1
+
+        if showSLTPLines
+            stopLine := line.new(
+                 bar_index,
+                 stopPrice,
+                 bar_index + 1,
+                 stopPrice,
+                 xloc = xloc.bar_index,
+                 extend = extend.right,
+                 color = lossColor,
+                 style = line.style_dashed,
+                 width = 2
+            )
+
+            takeLine := line.new(
+                 bar_index,
+                 takePrice,
+                 bar_index + 1,
+                 takePrice,
+                 xloc = xloc.bar_index,
+                 extend = extend.right,
+                 color = profitColor,
+                 style = line.style_dashed,
+                 width = 2
+            )
+
+        // Alert đảo lệnh được phát ở khối alertcondition phía dưới.
+        // Router nhận OPEN chiều ngược và tự xử lý reverse; không phát CLOSE riêng.
+
+//==================================================
+// 16. XÁC ĐỊNH LỆNH MỚI THÔNG THƯỜNG
+//==================================================
+bool enterBuy = false
+bool enterSell = false
+
+// Nếu đầu nến đã có lệnh, nến đó chỉ được dùng để quản lý lệnh cũ
+// hoặc đảo lệnh; không được mở thêm một lệnh thông thường khác.
+if barstate.isconfirmed and
+   not tradeWasOpenAtBarStart and
+   not exitNow and
+   tradeDirection == 0
+
+    enterBuy :=
+         buySignal and
+         not na(atr5) and
+         not na(upper1) and
+         upper1 > close
+
+    enterSell :=
+         sellSignal and
+         not na(atr5) and
+         not na(lower1) and
+         lower1 < close
+
+//==================================================
+// 17. MỞ LỆNH BUY THÔNG THƯỜNG
+//==================================================
+if enterBuy
+    tradeDirection := 1
+    entryBar := bar_index
+    entryTimestamp := na(time_close) ? time : time_close
+    entryPrice := close
+    stopPrice := entryPrice - k * atr5
+    takePrice := upper1
+    tradeCutoffTime := sessionEndForCurrentBar
+
+    if showSLTPLines
+        stopLine := line.new(
+             bar_index,
+             stopPrice,
+             bar_index + 1,
+             stopPrice,
+             xloc = xloc.bar_index,
+             extend = extend.right,
+             color = lossColor,
+             style = line.style_dashed,
+             width = 2
+        )
+
+        takeLine := line.new(
+             bar_index,
+             takePrice,
+             bar_index + 1,
+             takePrice,
+             xloc = xloc.bar_index,
+             extend = extend.right,
+             color = profitColor,
+             style = line.style_dashed,
+             width = 2
+        )
+
+
+//==================================================
+// 18. MỞ LỆNH SELL THÔNG THƯỜNG
+//==================================================
+if enterSell
+    tradeDirection := -1
+    entryBar := bar_index
+    entryTimestamp := na(time_close) ? time : time_close
+    entryPrice := close
+    stopPrice := entryPrice + k * atr5
+    takePrice := lower1
+    tradeCutoffTime := sessionEndForCurrentBar
+
+    if showSLTPLines
+        stopLine := line.new(
+             bar_index,
+             stopPrice,
+             bar_index + 1,
+             stopPrice,
+             xloc = xloc.bar_index,
+             extend = extend.right,
+             color = lossColor,
+             style = line.style_dashed,
+             width = 2
+        )
+
+        takeLine := line.new(
+             bar_index,
+             takePrice,
+             bar_index + 1,
+             takePrice,
+             xloc = xloc.bar_index,
+             extend = extend.right,
+             color = profitColor,
+             style = line.style_dashed,
+             width = 2
+        )
+
+
+//==================================================
+// 19. HIỂN THỊ LỆNH VÀ CẢNH BÁO ĐIỀU KIỆN
+//==================================================
+bool buyEntryThisBar = enterBuy or enterReverseBuy
+bool sellEntryThisBar = enterSell or enterReverseSell
+
+// Chỉ hiện MỘT nhãn BUY/SELL cho mỗi lần vào lệnh.
+// Nhãn kết quả đảo lệnh nằm ở phía đối diện nên không bị chồng.
+plotshape(
+     showBuySignal and buyEntryThisBar,
+     title = "Buy Entry",
+     text = "BUY",
+     style = shape.labelup,
+     location = location.belowbar,
+     color = color.green,
+     textcolor = color.white,
+     size = size.small
+)
+
+plotshape(
+     showSellSignal and sellEntryThisBar,
+     title = "Sell Entry",
+     text = "SELL",
+     style = shape.labeldown,
+     location = location.abovebar,
+     color = color.red,
+     textcolor = color.white,
+     size = size.small
+)
+
+//==================================================
+// 19.1. 6 ALERT RIÊNG BUY / SELL / BUY-SL / SELL-SL / BUY-TP / SELL-TP
+//==================================================
+// CÁCH TẠO TRÊN TRADINGVIEW:
+//   1) Tạo 6 Alert riêng từ indicator này.
+//   2) Condition lần lượt chọn:
+//        - BUY - Router
+//        - SELL - Router
+//        - BUY-SL - Router
+//        - SELL-SL - Router
+//        - BUY-TP - Router
+//        - SELL-TP - Router
+//   3) Message được điền sẵn JSON bên dưới; có thể sửa API key/channel/symbol trực tiếp.
+//   4) KHÔNG chọn "Any alert() function call".
+//   5) SL/TP giờ đã tách riêng theo chiều BUY/SELL (dựa vào lastClosedDirection),
+//      không còn dùng chung 1 alert cho cả 2 chiều như trước — tránh đóng nhầm
+//      lệnh mới mở khi bị đảo chiều.
+//
+// Đảo lệnh: chỉ kích hoạt OPEN của chiều mới; Router tự đóng chiều cũ và mở chiều mới.
+// Hết giờ: nếu sendSessionEndClose = true thì dùng cùng Alert SL để CLOSE.
+
+bool buyRouterAlert = enableRouterAlerts and (enterBuy or enterReverseBuy)
+bool sellRouterAlert = enableRouterAlerts and (enterSell or enterReverseSell)
+
+bool exitIsSl =
+     exitNow and
+     (
+         exitReason == "SL" or
+         (exitReason == "HẾT GIỜ" and sendSessionEndClose)
+     )
+bool exitIsTp = exitNow and exitReason == "TP"
+
+// Tách riêng theo chiều BUY/SELL bằng lastClosedDirection (đã lưu
+// TRƯỚC khi tradeDirection bị reset ở mục 15), để mỗi alert biết
+// chắc chắn nó đóng đúng lệnh chiều nào — tránh đóng nhầm lệnh mới
+// mở sau khi đảo chiều.
+bool buySlRouterAlert  = enableRouterAlerts and exitIsSl and lastClosedDirection == 1
+bool sellSlRouterAlert = enableRouterAlerts and exitIsSl and lastClosedDirection == -1
+bool buyTpRouterAlert  = enableRouterAlerts and exitIsTp and lastClosedDirection == 1
+bool sellTpRouterAlert = enableRouterAlerts and exitIsTp and lastClosedDirection == -1
+
+alertcondition(
+     buyRouterAlert,
+     title = "BUY - Router",
+     message = "{\"api_key\":\"API_KEY_CO_DINH_CUA_BAN\",\"channel\":\"MACD\",\"event\":\"OPEN\",\"symbol\":\"XAUUSDc\",\"side\":\"BUY\"}"
+)
+
+alertcondition(
+     sellRouterAlert,
+     title = "SELL - Router",
+     message = "{\"api_key\":\"API_KEY_CO_DINH_CUA_BAN\",\"channel\":\"MACD\",\"event\":\"OPEN\",\"symbol\":\"XAUUSDc\",\"side\":\"SELL\"}"
+)
+
+alertcondition(
+     buySlRouterAlert,
+     title = "BUY-SL - Router",
+     message = "{\"api_key\":\"API_KEY_CO_DINH_CUA_BAN\",\"channel\":\"MACD\",\"event\":\"CLOSE\",\"symbol\":\"XAUUSDc\",\"side\":\"BUY\",\"reason\":\"SL\"}"
+)
+
+alertcondition(
+     sellSlRouterAlert,
+     title = "SELL-SL - Router",
+     message = "{\"api_key\":\"API_KEY_CO_DINH_CUA_BAN\",\"channel\":\"MACD\",\"event\":\"CLOSE\",\"symbol\":\"XAUUSDc\",\"side\":\"SELL\",\"reason\":\"SL\"}"
+)
+
+alertcondition(
+     buyTpRouterAlert,
+     title = "BUY-TP - Router",
+     message = "{\"api_key\":\"API_KEY_CO_DINH_CUA_BAN\",\"channel\":\"MACD\",\"event\":\"CLOSE\",\"symbol\":\"XAUUSDc\",\"side\":\"BUY\",\"reason\":\"TP\"}"
+)
+
+alertcondition(
+     sellTpRouterAlert,
+     title = "SELL-TP - Router",
+     message = "{\"api_key\":\"API_KEY_CO_DINH_CUA_BAN\",\"channel\":\"MACD\",\"event\":\"CLOSE\",\"symbol\":\"XAUUSDc\",\"side\":\"SELL\",\"reason\":\"TP\"}"
+)
+
+//==================================================
+// 19.2. LÃI/LỖ ĐANG CHẠY TẠI GIÁ THỰC TẾ
+//==================================================
+// Chỉ dùng một nhãn động trên cây nến mới nhất. Nhãn được đặt
+// sang phải cây nến để không che thân/râu nến, nhưng vẫn giữ đúng
+// cao độ của giá Close hiện tại.
+if barstate.islast
+    bool hasOpenTrade =
+         tradeDirection != 0 and
+         not na(entryPrice)
+
+    if showRunningPnlLabel and hasOpenTrade
+        float runningPnl =
+             (close - entryPrice) *
+             tradeDirection *
+             moneyPerPriceUnitAtOneLot *
+             lotSize
+
+        string runningSign =
+             runningPnl > 0 ? "+" :
+             runningPnl < 0 ? "-" : ""
+
+        string runningSide =
+             tradeDirection == 1 ?
+             "BUY" :
+             "SELL"
+
+        string runningText =
+             runningSide +
+             "  " +
+             runningSign +
+             currencySymbol +
+             str.tostring(math.abs(runningPnl), "#.00")
+
+        color runningColor =
+             runningPnl > 0 ?
+             profitColor :
+             runningPnl < 0 ?
+             lossColor :
+             color.rgb(105, 110, 125)
+
+        int runningLabelX =
+             bar_index +
+             runningPnlLabelBarOffset
+
+        float runningLabelY = close
+
+        if na(runningPnlLabel)
+            runningPnlLabel := label.new(
+                 x = runningLabelX,
+                 y = runningLabelY,
+                 text = runningText,
+                 xloc = xloc.bar_index,
+                 yloc = yloc.price,
+                 style = label.style_label_left,
+                 color = runningColor,
+                 textcolor = color.white,
+                 size = size.small
+            )
+        else
+            label.set_x(runningPnlLabel, runningLabelX)
+            label.set_y(runningPnlLabel, runningLabelY)
+            label.set_text(runningPnlLabel, runningText)
+            label.set_color(runningPnlLabel, runningColor)
+            label.set_textcolor(runningPnlLabel, color.white)
+
+    else
+        if not na(runningPnlLabel)
+            label.delete(runningPnlLabel)
+            runningPnlLabel := na
+
+//==================================================
+// 20. BẢNG THỐNG KÊ GỘP
+//==================================================
+// Bố cục khi bật cả ba khối:
+//
+// TỔNG HỢP (2 cột) | NGÀY (3 cột) | THÁNG (3 cột)
+//
+// Các cột phân cách mảnh được tạo giữa các khối để bảng
+// dễ đọc và có bố cục gần giống mẫu tham chiếu.
+var table unifiedTable = na
+var int unifiedRowsCreated = 0
+var int unifiedColumnsCreated = 0
+
+if barstate.islast
+
+    //================================================
+    // XÁC ĐỊNH THÁNG HIỂN THỊ TRONG BẢNG NGÀY
+    //================================================
+    // Ưu tiên tháng của ngày giao dịch thực tế gần nhất trong dữ liệu.
+    // Nhờ vậy, khi sang tháng mới và bắt đầu có ngày giao dịch đầu tiên,
+    // bảng ngày sẽ chuyển sang tháng mới ngay cả khi chưa có lệnh nào.
+    int tradingDayArraySize = array.size(tradingDayKeys)
+
+    // Ưu tiên tuyệt đối tháng của phiên đang chạy theo timenow.
+    // Không ghi đè lại bằng phần tử cuối của mảng lịch sử, vì phần tử đó
+    // có thể vẫn thuộc tháng trước khi chart vừa chuyển sang phiên mới.
+    int liveSessionEndForTable = f_sessionEnd(timenow, startHour, startMinute, endHour, endMinute, sessionTimezone)
+    int liveTradingMonthKeyForTable =
+         not na(liveSessionEndForTable) ?
+         f_getTradingMonthKey(timenow, startHour, startMinute, endHour, endMinute, sessionTimezone) :
+         na
+
+    int displayedDayMonthKey =
+         not na(liveTradingMonthKeyForTable) ?
+         liveTradingMonthKeyForTable :
+         not na(latestTradingMonthKey) ?
+         latestTradingMonthKey :
+         f_getTradingMonthKey(time, startHour, startMinute, endHour, endMinute, sessionTimezone)
+
+    int displayedDayYear = int(math.floor(displayedDayMonthKey / 100.0))
+    int displayedDayMonth = displayedDayMonthKey % 100
+
+    int dailyDataRows = 0
+    int displayedMonthTrades = 0
+    float displayedMonthProfit = 0.0
+
+    if tradingDayArraySize > 0
+        for tradingDayIndex = 0 to tradingDayArraySize - 1
+            int storedTradingDayKey = array.get(tradingDayKeys, tradingDayIndex)
+            int storedTradingMonthKey = int(math.floor(storedTradingDayKey / 100.0))
+
+            if storedTradingMonthKey == displayedDayMonthKey
+                dailyDataRows += 1
+
+                int storedTradingDayIndex = array.indexof(dailyKeys, storedTradingDayKey)
+                if storedTradingDayIndex != -1
+                    displayedMonthTrades += array.get(dailyTradeCounts, storedTradingDayIndex)
+                    displayedMonthProfit += array.get(dailyProfits, storedTradingDayIndex)
+
+    int monthlyDataRows = array.size(monthlyKeys)
+
+    //================================================
+    // TÍNH SỐ CỘT VÀ VỊ TRÍ TỪNG KHỐI
+    //================================================
+    bool showAnyPanel =
+         showStatsTable or
+         showDailyTable or
+         showMonthlyTable
+
+    int visibleBlocks =
+         (showStatsTable ? 1 : 0) +
+         (showDailyTable ? 1 : 0) +
+         (showMonthlyTable ? 1 : 0)
+
+    int autoFitTightness =
+         visibleBlocks >= 3 ? 2 :
+         visibleBlocks == 2 ? 1 : 0
+
+    int summaryStartColumn = na
+    int dailyStartColumn = na
+    int monthlyStartColumn = na
+
+    int separatorBeforeDaily = na
+    int separatorBeforeMonthly = na
+
+    int nextColumn = 0
+    bool alreadyHasBlock = false
+
+    if showStatsTable
+        summaryStartColumn := nextColumn
+        nextColumn += 2
+        alreadyHasBlock := true
+
+    if showDailyTable
+        if alreadyHasBlock
+            separatorBeforeDaily := nextColumn
+            nextColumn += 1
+
+        dailyStartColumn := nextColumn
+        nextColumn += 3
+        alreadyHasBlock := true
+
+    if showMonthlyTable
+        if alreadyHasBlock
+            separatorBeforeMonthly := nextColumn
+            nextColumn += 1
+
+        monthlyStartColumn := nextColumn
+        nextColumn += 3
+
+    int requiredColumns = math.max(nextColumn, 1)
+
+    //================================================
+    // TÍNH SỐ DÒNG CẦN THIẾT
+    //================================================
+    // Bảng tổng hợp:
+    // 1 header + 2 dòng nổi bật + 3 dòng thống kê chính
+    // + số năm + 8 dòng cuối.
+    int summaryRows =
+         showStatsTable ?
+         14 + yearsToShow :
+         0
+
+    int dailyRows =
+         showDailyTable ?
+         dailyDataRows + 2 :
+         0
+
+    int monthlyRows =
+         showMonthlyTable ?
+         monthlyDataRows + 2 :
+         0
+
+    int requiredRows = math.max(
+         1,
+         math.max(
+             summaryRows,
+             math.max(dailyRows, monthlyRows)
+         )
+    )
+
+    //================================================
+    // TẠO HOẶC TẠO LẠI BẢNG KHI KÍCH THƯỚC ĐỔI
+    //================================================
+    if showAnyPanel
+
+        bool rebuildTable =
+             na(unifiedTable) or
+             unifiedRowsCreated != requiredRows or
+             unifiedColumnsCreated != requiredColumns
+
+        if rebuildTable
+
+            if not na(unifiedTable)
+                table.delete(unifiedTable)
+
+            unifiedTable := table.new(
+                 panelPosition,
+                 requiredColumns,
+                 requiredRows,
+                 frame_color = color.rgb(75, 63, 95),
+                 frame_width = 1,
+                 border_color = color.rgb(58, 64, 80),
+                 border_width = 1
+            )
+
+            unifiedRowsCreated := requiredRows
+            unifiedColumnsCreated := requiredColumns
+
+        //================================================
+        // XÓA VÀ TẠO NỀN CHUNG
+        //================================================
+        for clearColumn = 0 to unifiedColumnsCreated - 1
+            for clearRow = 0 to unifiedRowsCreated - 1
+
+                color clearBg =
+                     clearRow == 0 ?
+                     headerBg :
+                     clearRow % 2 == 0 ?
+                     rowBg1 :
+                     rowBg2
+
+                f_panelCell(
+                     unifiedTable,
+                     clearColumn,
+                     clearRow,
+                     "",
+                     mutedColor,
+                     clearBg,
+                     "center",
+                     panelBodySize,
+                     0
+                )
+
+        // Cột phân cách giữa các khối.
+        if not na(separatorBeforeDaily)
+            for separatorRow = 0 to unifiedRowsCreated - 1
+                f_panelCell(
+                     unifiedTable,
+                     separatorBeforeDaily,
+                     separatorRow,
+                     "",
+                     mutedColor,
+                     separatorBg,
+                     "center",
+                     panelBodySize,
+                     1
+                )
+
+        if not na(separatorBeforeMonthly)
+            for separatorRow = 0 to unifiedRowsCreated - 1
+                f_panelCell(
+                     unifiedTable,
+                     separatorBeforeMonthly,
+                     separatorRow,
+                     "",
+                     mutedColor,
+                     separatorBg,
+                     "center",
+                     panelBodySize,
+                     1
+                )
+
+        //================================================
+        // KHỐI 1: BẢNG TỔNG HỢP
+        //================================================
+        if showStatsTable
+
+            int rowSummary = 0
+            int summaryLabelWidthBase =
+                 panelScaleInput == "Lớn" ? 15 :
+                 panelScaleInput == "Vừa" ? 13 : 11
+            int summaryValueWidthBase =
+                 panelScaleInput == "Lớn" ? 15 :
+                 panelScaleInput == "Vừa" ? 13 : 11
+            int summaryLabelWidth = math.max(9, summaryLabelWidthBase - autoFitTightness * 2)
+            int summaryValueWidth = math.max(9, summaryValueWidthBase - autoFitTightness * 2)
+
+            float safeCapital =
+                 maxEquityDrawdown *
+                 3.0
+
+            float winRate =
+                 totalTrades > 0 ?
+                 tpTrades * 100.0 / totalTrades :
+                 0.0
+
+            // Header
+            f_panelCell(
+                 unifiedTable,
+                 summaryStartColumn,
+                 rowSummary,
+                 statsTitle,
+                 color.yellow,
+                 headerBg,
+                 "center",
+                 panelHeaderSize,
+                 summaryLabelWidth
+            )
+
+            f_panelCell(
+                 unifiedTable,
+                 summaryStartColumn + 1,
+                 rowSummary,
+                 "SL ×" + str.tostring(k, "#.0") + " · TP1",
+                 color.yellow,
+                 headerBg,
+                 "center",
+                 panelHeaderSize,
+                 summaryValueWidth
+            )
+
+            rowSummary += 1
+
+            // Max Equity Drawdown
+            f_panelCell(
+                 unifiedTable,
+                 summaryStartColumn,
+                 rowSummary,
+                 "Max Equity DD · Vốn gốc",
+                 color.white,
+                 headerBg,
+                 "left",
+                 panelEmphasisSize,
+                 summaryLabelWidth
+            )
+
+            f_panelCell(
+                 unifiedTable,
+                 summaryStartColumn + 1,
+                 rowSummary,
+                 "-" + currencySymbol + str.tostring(maxEquityDrawdown, "#.##") +
+                 " · 0.01 lot",
+                 maxEquityDrawdown > 0 ? lossColor : mutedColor,
+                 headerBg,
+                 "center",
+                 panelEmphasisSize,
+                 summaryValueWidth
+            )
+
+            rowSummary += 1
+
+            // Vốn an toàn
+            f_panelCell(
+                 unifiedTable,
+                 summaryStartColumn,
+                 rowSummary,
+                 "🛡 Vốn an toàn ×3",
+                 color.white,
+                 headerBg,
+                 "left",
+                 panelEmphasisSize,
+                 summaryLabelWidth
+            )
+
+            f_panelCell(
+                 unifiedTable,
+                 summaryStartColumn + 1,
+                 rowSummary,
+                 f_money(safeCapital),
+                 warningColor,
+                 headerBg,
+                 "center",
+                 panelEmphasisSize,
+                 summaryValueWidth
+            )
+
+            rowSummary += 1
+
+            // Tổng lệnh
+            color summaryBg =
+                 rowSummary % 2 == 0 ?
+                 rowBg1 :
+                 rowBg2
+
+            f_panelCell(
+                 unifiedTable,
+                 summaryStartColumn,
+                 rowSummary,
+                 "Tổng lệnh",
+                 mutedColor,
+                 summaryBg,
+                 "left",
+                 panelBodySize,
+                 summaryLabelWidth
+            )
+
+            f_panelCell(
+                 unifiedTable,
+                 summaryStartColumn + 1,
+                 rowSummary,
+                 str.tostring(totalTrades),
+                 textColor,
+                 summaryBg,
+                 "center",
+                 panelBodySize,
+                 summaryValueWidth
+            )
+
+            rowSummary += 1
+
+            // Thắng / Thua
+            summaryBg :=
+                 rowSummary % 2 == 0 ?
+                 rowBg1 :
+                 rowBg2
+
+            f_panelCell(
+                 unifiedTable,
+                 summaryStartColumn,
+                 rowSummary,
+                 "Thắng / Thua",
+                 mutedColor,
+                 summaryBg,
+                 "left",
+                 panelBodySize,
+                 summaryLabelWidth
+            )
+
+            f_panelCell(
+                 unifiedTable,
+                 summaryStartColumn + 1,
+                 rowSummary,
+                 str.tostring(tpTrades) + " / " + str.tostring(slTrades),
+                 textColor,
+                 summaryBg,
+                 "center",
+                 panelBodySize,
+                 summaryValueWidth
+            )
+
+            rowSummary += 1
+
+            // Tỷ lệ Win
+            summaryBg :=
+                 rowSummary % 2 == 0 ?
+                 rowBg1 :
+                 rowBg2
+
+            f_panelCell(
+                 unifiedTable,
+                 summaryStartColumn,
+                 rowSummary,
+                 "Tỷ lệ Win",
+                 mutedColor,
+                 summaryBg,
+                 "left",
+                 panelBodySize,
+                 summaryLabelWidth
+            )
+
+            f_panelCell(
+                 unifiedTable,
+                 summaryStartColumn + 1,
+                 rowSummary,
+                 str.tostring(winRate, "#.##") + "%",
+                 warningColor,
+                 summaryBg,
+                 "center",
+                 panelBodySize,
+                 summaryValueWidth
+            )
+
+            rowSummary += 1
+
+            // Lãi/lỗ từng năm
+            int latestYear = year(time, sessionTimezone)
+
+            for yearOffset = 0 to yearsToShow - 1
+
+                int displayYear = latestYear - yearOffset
+                float yearProfit = f_getYearProfit(displayYear)
+
+                summaryBg :=
+                     rowSummary % 2 == 0 ?
+                     rowBg1 :
+                     rowBg2
+
+                f_panelCell(
+                     unifiedTable,
+                     summaryStartColumn,
+                     rowSummary,
+                     str.tostring(displayYear),
+                     mutedColor,
+                     summaryBg,
+                     "left",
+                     panelBodySize,
+                     summaryLabelWidth
+                )
+
+                f_panelCell(
+                     unifiedTable,
+                     summaryStartColumn + 1,
+                     rowSummary,
+                     f_money(yearProfit),
+                     f_pnlColor(yearProfit),
+                     summaryBg,
+                     "center",
+                     panelBodySize,
+                     summaryValueWidth
+                )
+
+                rowSummary += 1
+
+            // Lệnh lãi nhất
+            summaryBg :=
+                 rowSummary % 2 == 0 ?
+                 rowBg1 :
+                 rowBg2
+
+            f_panelCell(
+                 unifiedTable,
+                 summaryStartColumn,
+                 rowSummary,
+                 "Lệnh lãi nhất",
+                 mutedColor,
+                 summaryBg,
+                 "left",
+                 panelBodySize,
+                 summaryLabelWidth
+            )
+
+            f_panelCell(
+                 unifiedTable,
+                 summaryStartColumn + 1,
+                 rowSummary,
+                 f_money(bestWinningTrade),
+                 f_pnlColor(bestWinningTrade),
+                 summaryBg,
+                 "center",
+                 panelBodySize,
+                 summaryValueWidth
+            )
+
+            rowSummary += 1
+
+            // Lệnh lỗ nhất
+            summaryBg :=
+                 rowSummary % 2 == 0 ?
+                 rowBg1 :
+                 rowBg2
+
+            f_panelCell(
+                 unifiedTable,
+                 summaryStartColumn,
+                 rowSummary,
+                 "Lệnh lỗ nhất",
+                 mutedColor,
+                 summaryBg,
+                 "left",
+                 panelBodySize,
+                 summaryLabelWidth
+            )
+
+            f_panelCell(
+                 unifiedTable,
+                 summaryStartColumn + 1,
+                 rowSummary,
+                 f_money(worstLosingTrade),
+                 f_pnlColor(worstLosingTrade),
+                 summaryBg,
+                 "center",
+                 panelBodySize,
+                 summaryValueWidth
+            )
+
+            rowSummary += 1
+
+            // Chuỗi lãi max
+            summaryBg :=
+                 rowSummary % 2 == 0 ?
+                 rowBg1 :
+                 rowBg2
+
+            f_panelCell(
+                 unifiedTable,
+                 summaryStartColumn,
+                 rowSummary,
+                 "Chuỗi lãi max",
+                 mutedColor,
+                 summaryBg,
+                 "left",
+                 panelBodySize,
+                 summaryLabelWidth
+            )
+
+            f_panelCell(
+                 unifiedTable,
+                 summaryStartColumn + 1,
+                 rowSummary,
+                 str.tostring(maxWinStreak) + " lệnh · " + f_money(maxWinStreakProfit),
+                 profitColor,
+                 summaryBg,
+                 "center",
+                 panelBodySize,
+                 summaryValueWidth
+            )
+
+            rowSummary += 1
+
+            // Chuỗi lỗ max
+            summaryBg :=
+                 rowSummary % 2 == 0 ?
+                 rowBg1 :
+                 rowBg2
+
+            f_panelCell(
+                 unifiedTable,
+                 summaryStartColumn,
+                 rowSummary,
+                 "Chuỗi lỗ max",
+                 mutedColor,
+                 summaryBg,
+                 "left",
+                 panelBodySize,
+                 summaryLabelWidth
+            )
+
+            f_panelCell(
+                 unifiedTable,
+                 summaryStartColumn + 1,
+                 rowSummary,
+                 str.tostring(maxLossStreak) + " lệnh · " + f_money(maxLossStreakProfit),
+                 lossColor,
+                 summaryBg,
+                 "center",
+                 panelBodySize,
+                 summaryValueWidth
+            )
+
+            rowSummary += 1
+
+            // Sản phẩm và khối lượng
+            summaryBg :=
+                 rowSummary % 2 == 0 ?
+                 rowBg1 :
+                 rowBg2
+
+            f_panelCell(
+                 unifiedTable,
+                 summaryStartColumn,
+                 rowSummary,
+                 "Vàng·" + currencyText,
+                 color.aqua,
+                 summaryBg,
+                 "left",
+                 panelBodySize,
+                 summaryLabelWidth
+            )
+
+            f_panelCell(
+                 unifiedTable,
+                 summaryStartColumn + 1,
+                 rowSummary,
+                 "0.01 lot ×" + str.tostring(moneyPerPriceUnitAtOneLot, "#.##"),
+                 textColor,
+                 summaryBg,
+                 "center",
+                 panelBodySize,
+                 summaryValueWidth
+            )
+
+            rowSummary += 1
+
+            // Dữ liệu từ
+            string dataFromText =
+                 na(firstDataTime) ?
+                 "—" :
+                 str.format_time(
+                     firstDataTime,
+                     "dd/MM/yyyy HH:mm",
+                     sessionTimezone
+                 )
+
+            summaryBg :=
+                 rowSummary % 2 == 0 ?
+                 rowBg1 :
+                 rowBg2
+
+            f_panelCell(
+                 unifiedTable,
+                 summaryStartColumn,
+                 rowSummary,
+                 "Dữ liệu từ",
+                 mutedColor,
+                 summaryBg,
+                 "left",
+                 panelBodySize,
+                 summaryLabelWidth
+            )
+
+            f_panelCell(
+                 unifiedTable,
+                 summaryStartColumn + 1,
+                 rowSummary,
+                 dataFromText,
+                 textColor,
+                 summaryBg,
+                 "center",
+                 panelBodySize,
+                 summaryValueWidth
+            )
+
+            rowSummary += 1
+
+            // Tổng
+            string totalText =
+                 f_money(totalNetProfit) +
+                 " · " +
+                 str.tostring(winRate, "#.##") +
+                 "% (" +
+                 str.tostring(totalTrades) +
+                 ")"
+
+            f_panelCell(
+                 unifiedTable,
+                 summaryStartColumn,
+                 rowSummary,
+                 "Tổng",
+                 color.white,
+                 totalBg,
+                 "left",
+                 panelEmphasisSize,
+                 summaryLabelWidth
+            )
+
+            f_panelCell(
+                 unifiedTable,
+                 summaryStartColumn + 1,
+                 rowSummary,
+                 totalText,
+                 f_pnlColor(totalNetProfit),
+                 totalBg,
+                 "center",
+                 panelEmphasisSize,
+                 summaryValueWidth
+            )
+
+            rowSummary += 1
+
+            // Ghi chú
+            f_panelCell(
+                 unifiedTable,
+                 summaryStartColumn,
+                 rowSummary,
+                 "⚠ Chưa trừ spread",
+                 warningColor,
+                 rowBg1,
+                 "left",
+                 panelBodySize,
+                 summaryLabelWidth
+            )
+
+            f_panelCell(
+                 unifiedTable,
+                 summaryStartColumn + 1,
+                 rowSummary,
+                 "Số thật sẽ thấp hơn",
+                 warningColor,
+                 rowBg1,
+                 "center",
+                 panelBodySize,
+                 summaryValueWidth
+            )
+
+        //================================================
+        // KHỐI 2: BẢNG NGÀY
+        //================================================
+        if showDailyTable
+
+            int rowDaily = 0
+            int dailyDateWidthBase =
+                 panelScaleInput == "Lớn" ? 7 :
+                 panelScaleInput == "Vừa" ? 6 : 5
+            int dailyProfitWidthBase =
+                 panelScaleInput == "Lớn" ? 9 :
+                 panelScaleInput == "Vừa" ? 8 : 7
+            int dailyDateWidth = math.max(4, dailyDateWidthBase - autoFitTightness)
+            int dailyCountWidth = math.max(3, 4 - (autoFitTightness > 0 ? 1 : 0))
+            int dailyProfitWidth = math.max(6, dailyProfitWidthBase - autoFitTightness)
+
+            // Header
+            f_panelCell(
+                 unifiedTable,
+                 dailyStartColumn,
+                 rowDaily,
+                 "Ngày T" + str.tostring(displayedDayMonth),
+                 color.white,
+                 headerBg,
+                 "center",
+                 panelHeaderSize,
+                 dailyDateWidth
+            )
+
+            f_panelCell(
+                 unifiedTable,
+                 dailyStartColumn + 1,
+                 rowDaily,
+                 "L1",
+                 mutedColor,
+                 headerBg,
+                 "center",
+                 panelHeaderSize,
+                 dailyCountWidth
+            )
+
+            f_panelCell(
+                 unifiedTable,
+                 dailyStartColumn + 2,
+                 rowDaily,
+                 "TP1",
+                 color.yellow,
+                 headerBg,
+                 "center",
+                 panelHeaderSize,
+                 dailyProfitWidth
+            )
+
+            rowDaily += 1
+
+            // Các ngày giao dịch thực tế của tháng đang hiển thị,
+            // kể cả ngày chưa có lệnh thì vẫn hiện 0 lệnh và $0.00.
+            if tradingDayArraySize > 0
+                for tradingDayIndex = 0 to tradingDayArraySize - 1
+
+                    int storedTradingDayKey = array.get(tradingDayKeys, tradingDayIndex)
+                    int storedTradingMonthKey = int(math.floor(storedTradingDayKey / 100.0))
+
+                    if storedTradingMonthKey == displayedDayMonthKey
+
+                        int storedDay = storedTradingDayKey % 100
+                        int storedMonth = displayedDayMonth
+                        int statsIndex = array.indexof(dailyKeys, storedTradingDayKey)
+                        int storedTrades = statsIndex != -1 ? array.get(dailyTradeCounts, statsIndex) : 0
+                        float storedProfit = statsIndex != -1 ? array.get(dailyProfits, statsIndex) : 0.0
+
+                        color dailyBg =
+                             rowDaily % 2 == 0 ?
+                             rowBg1 :
+                             rowBg2
+
+                        f_panelCell(
+                             unifiedTable,
+                             dailyStartColumn,
+                             rowDaily,
+                             str.tostring(storedDay) + "/" + str.tostring(storedMonth),
+                             mutedColor,
+                             dailyBg,
+                             "left",
+                             panelBodySize,
+                             dailyDateWidth
+                        )
+
+                        f_panelCell(
+                             unifiedTable,
+                             dailyStartColumn + 1,
+                             rowDaily,
+                             str.tostring(storedTrades),
+                             mutedColor,
+                             dailyBg,
+                             "center",
+                             panelBodySize,
+                             dailyCountWidth
+                        )
+
+                        f_panelCell(
+                             unifiedTable,
+                             dailyStartColumn + 2,
+                             rowDaily,
+                             f_money(storedProfit),
+                             f_pnlColor(storedProfit),
+                             dailyBg,
+                             "center",
+                             panelBodySize,
+                             dailyProfitWidth
+                        )
+
+                        rowDaily += 1
+
+            // Tổng tháng đang hiển thị
+            f_panelCell(
+                 unifiedTable,
+                 dailyStartColumn,
+                 rowDaily,
+                 "Tổng tháng",
+                 color.white,
+                 totalBg,
+                 "left",
+                 panelHeaderSize,
+                 dailyDateWidth
+            )
+
+            f_panelCell(
+                 unifiedTable,
+                 dailyStartColumn + 1,
+                 rowDaily,
+                 str.tostring(displayedMonthTrades),
+                 color.white,
+                 totalBg,
+                 "center",
+                 panelHeaderSize,
+                 dailyCountWidth
+            )
+
+            f_panelCell(
+                 unifiedTable,
+                 dailyStartColumn + 2,
+                 rowDaily,
+                 f_money(displayedMonthProfit),
+                 f_pnlColor(displayedMonthProfit),
+                 totalBg,
+                 "center",
+                 panelHeaderSize,
+                 dailyProfitWidth
+            )
+
+        //================================================
+        // KHỐI 3: BẢNG THÁNG
+        //================================================
+        if showMonthlyTable
+
+            int rowMonthly = 0
+            int monthLabelWidthBase =
+                 panelScaleInput == "Lớn" ? 8 :
+                 panelScaleInput == "Vừa" ? 7 : 6
+            int monthProfitWidthBase =
+                 panelScaleInput == "Lớn" ? 9 :
+                 panelScaleInput == "Vừa" ? 8 : 7
+            int monthLabelWidth = math.max(5, monthLabelWidthBase - autoFitTightness)
+            int monthCountWidth = math.max(3, 4 - (autoFitTightness > 0 ? 1 : 0))
+            int monthProfitWidth = math.max(6, monthProfitWidthBase - autoFitTightness)
+
+            // Header
+            f_panelCell(
+                 unifiedTable,
+                 monthlyStartColumn,
+                 rowMonthly,
+                 "Tháng",
+                 color.white,
+                 headerBg,
+                 "center",
+                 panelHeaderSize,
+                 monthLabelWidth
+            )
+
+            f_panelCell(
+                 unifiedTable,
+                 monthlyStartColumn + 1,
+                 rowMonthly,
+                 "L1",
+                 mutedColor,
+                 headerBg,
+                 "center",
+                 panelHeaderSize,
+                 monthCountWidth
+            )
+
+            f_panelCell(
+                 unifiedTable,
+                 monthlyStartColumn + 2,
+                 rowMonthly,
+                 "TP1",
+                 color.yellow,
+                 headerBg,
+                 "center",
+                 panelHeaderSize,
+                 monthProfitWidth
+            )
+
+            rowMonthly += 1
+
+            // Toàn bộ các tháng trong dữ liệu TradingView đang tải.
+            if monthlyDataRows > 0
+                for monthlyIndex = 0 to monthlyDataRows - 1
+
+                    int storedMonthKey = array.get(monthlyKeys, monthlyIndex)
+                    int storedYear = int(math.floor(storedMonthKey / 100.0))
+                    int storedMonth = storedMonthKey % 100
+                    int storedTrades = array.get(monthlyTradeCounts, monthlyIndex)
+                    float storedProfit = array.get(monthlyProfits, monthlyIndex)
+
+                    color monthlyBg =
+                         rowMonthly % 2 == 0 ?
+                         rowBg1 :
+                         rowBg2
+
+                    f_panelCell(
+                         unifiedTable,
+                         monthlyStartColumn,
+                         rowMonthly,
+                         "T" + str.tostring(storedMonth) + "/" + str.tostring(storedYear),
+                         mutedColor,
+                         monthlyBg,
+                         "left",
+                         panelBodySize,
+                         monthLabelWidth
+                    )
+
+                    f_panelCell(
+                         unifiedTable,
+                         monthlyStartColumn + 1,
+                         rowMonthly,
+                         str.tostring(storedTrades),
+                         mutedColor,
+                         monthlyBg,
+                         "center",
+                         panelBodySize,
+                         monthCountWidth
+                    )
+
+                    f_panelCell(
+                         unifiedTable,
+                         monthlyStartColumn + 2,
+                         rowMonthly,
+                         f_money(storedProfit),
+                         f_pnlColor(storedProfit),
+                         monthlyBg,
+                         "center",
+                         panelBodySize,
+                         monthProfitWidth
+                    )
+
+                    rowMonthly += 1
+
+            // Tổng toàn bộ lịch sử
+            f_panelCell(
+                 unifiedTable,
+                 monthlyStartColumn,
+                 rowMonthly,
+                 "Tổng",
+                 color.white,
+                 totalBg,
+                 "left",
+                 panelHeaderSize,
+                 monthLabelWidth
+            )
+
+            f_panelCell(
+                 unifiedTable,
+                 monthlyStartColumn + 1,
+                 rowMonthly,
+                 str.tostring(totalTrades),
+                 color.white,
+                 totalBg,
+                 "center",
+                 panelHeaderSize,
+                 monthCountWidth
+            )
+
+            f_panelCell(
+                 unifiedTable,
+                 monthlyStartColumn + 2,
+                 rowMonthly,
+                 f_money(totalNetProfit),
+                 f_pnlColor(totalNetProfit),
+                 totalBg,
+                 "center",
+                 panelHeaderSize,
+                 monthProfitWidth
+            )
+
+    else
+
+        if not na(unifiedTable)
+            table.delete(unifiedTable)
+            unifiedTable := na
+            unifiedRowsCreated := 0
+            unifiedColumnsCreated := 0
+

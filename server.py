@@ -120,17 +120,34 @@ def webhook():
 
         logger.info(f"Webhook nhận: {json.dumps(data, ensure_ascii=False)}")
 
-        token = data.get("token", "")
+        token = data.get("token", "") or data.get("api_key", "")
         if settings["token"] and token != settings["token"]:
             logger.warning("Token không hợp lệ")
             return jsonify({"status": "fail", "message": "Invalid token"}), 401
 
+        # Định dạng "Router" của DAO_LENH_STRATEGY.pine (6 alert BUY/SELL/BUY-SL/SELL-SL/BUY-TP/SELL-TP):
+        #   {"event":"OPEN"/"CLOSE", "side":"BUY"/"SELL", "reason":"SL"/"TP"}
+        event = data.get("event", "").upper()
+        close_direction = None
+        if event:
+            side = data.get("side", "").lower()
+            reason = data.get("reason", "")
+            if event == "OPEN":
+                action = side
+            elif event == "CLOSE":
+                action = "close"
+                close_direction = side or None
+            else:
+                return jsonify({"status": "fail", "message": f"event không hợp lệ: {event}"}), 400
+            comment = f"{reason} auto-close" if reason else "TradingView Router"
+        else:
+            action = data.get("action", "").lower()
+            comment = data.get("comment", "TradingView")
+
         symbol  = data.get("symbol", "") or settings["default_symbol"]
-        action  = data.get("action", "").lower()
         lot     = float(data.get("lot", settings["default_lot"]))
         sl      = float(data.get("sl", settings["default_sl"]))
         tp      = float(data.get("tp", settings["default_tp"]))
-        comment = data.get("comment", "TradingView")
         max_daily_loss   = float(settings.get("max_daily_loss", 0.0))
         max_daily_profit = float(settings.get("max_daily_profit", 0.0))
 
@@ -142,6 +159,8 @@ def webhook():
             "sl": sl, "tp": tp, "comment": comment,
             "max_daily_loss": max_daily_loss, "max_daily_profit": max_daily_profit,
         }
+        if close_direction:
+            order_params["close_direction"] = close_direction
 
         # Lọc tài khoản nếu webhook chỉ định
         target_accounts = data.get("accounts", [])

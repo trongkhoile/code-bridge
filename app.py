@@ -703,7 +703,7 @@ class App(ctk.CTk):
         mt5_handler.set_magic(s["magic_number"])
 
         port = s["port"]
-        self._flask_server = make_server("0.0.0.0", port, srv.app)
+        self._flask_server = make_server("0.0.0.0", port, srv.app, threaded=True)
         self._server_thread = threading.Thread(target=self._flask_server.serve_forever, daemon=True)
         self._server_thread.start()
 
