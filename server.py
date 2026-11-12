@@ -37,13 +37,13 @@ def _dispatch_order(order_params: dict) -> tuple:
             {"name": f"MT5 #{i+1}", "terminal_path": p, "enabled": True}
             for i, p in enumerate(terminal_paths)
         ]
-        logger.info(f"Phát hiện {len(accounts)} terminal MT5 đang chạy")
+        logger.info(f"Detected {len(accounts)} running MT5 terminal(s)")
         results = mt5_handler.place_order_parallel(accounts, order_params, magic=magic)
         ok      = sum(1 for r in results if r.get("success") and not r.get("skipped"))
         skipped = sum(1 for r in results if r.get("skipped"))
         total   = len(results) - skipped
-        logger.info(f"Kết quả: {ok}/{total} tài khoản thành công"
-                    + (f" ({skipped} bỏ qua)" if skipped else ""))
+        logger.info(f"Result: {ok}/{total} account(s) succeeded"
+                    + (f" ({skipped} skipped)" if skipped else ""))
         return jsonify({
             "status": "ok" if ok > 0 else "fail",
             "accounts_total": total,
@@ -60,7 +60,7 @@ def _dispatch_order(order_params: dict) -> tuple:
             close_direction=order_params.get("close_direction"),
         )
         if not result["success"]:
-            logger.error(f"Đặt lệnh thất bại: {result}")
+            logger.error(f"Order failed: {result}")
             return jsonify({"status": "fail", **result}), 500
         return jsonify({"status": "ok", **result})
 
@@ -94,8 +94,8 @@ def _handle_text_close_alert(text: str):
     direction = m_dir.group(1).lower() if m_dir else None
 
     logger.info(
-        f"Webhook (text) nhận: {kind} {direction.upper() if direction else '?'} {symbol}"
-        f" -> đóng lệnh Account {logins}"
+        f"Webhook (text) received: {kind} {direction.upper() if direction else '?'} {symbol}"
+        f" -> closing positions on Account {logins}"
     )
 
     order_params = {
@@ -118,11 +118,11 @@ def webhook():
                 return resp
             return jsonify({"status": "fail", "message": "Empty JSON"}), 400
 
-        logger.info(f"Webhook nhận: {json.dumps(data, ensure_ascii=False)}")
+        logger.info(f"Webhook received: {json.dumps(data, ensure_ascii=False)}")
 
         token = data.get("token", "") or data.get("api_key", "")
         if settings["token"] and token != settings["token"]:
-            logger.warning("Token không hợp lệ")
+            logger.warning("Invalid token")
             return jsonify({"status": "fail", "message": "Invalid token"}), 401
 
         # Định dạng "Router" của DAO_LENH_STRATEGY.pine (6 alert BUY/SELL/BUY-SL/SELL-SL/BUY-TP/SELL-TP):
@@ -138,7 +138,7 @@ def webhook():
                 action = "close"
                 close_direction = side or None
             else:
-                return jsonify({"status": "fail", "message": f"event không hợp lệ: {event}"}), 400
+                return jsonify({"status": "fail", "message": f"Invalid event: {event}"}), 400
             comment = f"{reason} auto-close" if reason else "TradingView Router"
         else:
             action = data.get("action", "").lower()
@@ -152,7 +152,7 @@ def webhook():
         max_daily_profit = float(settings.get("max_daily_profit", 0.0))
 
         if not symbol or not action:
-            return jsonify({"status": "fail", "message": "Thiếu symbol hoặc action"}), 400
+            return jsonify({"status": "fail", "message": "Missing symbol or action"}), 400
 
         order_params = {
             "symbol": symbol, "action": action, "lot": lot,
@@ -166,12 +166,12 @@ def webhook():
         target_accounts = data.get("accounts", [])
         if target_accounts:
             order_params["target_accounts"] = [int(a) for a in target_accounts]
-            logger.info(f"Chỉ đẩy vào tài khoản: {target_accounts}")
+            logger.info(f"Routing only to account(s): {target_accounts}")
 
         return _dispatch_order(order_params)
 
     except Exception as e:
-        logger.error(f"Lỗi webhook: {e}")
+        logger.error(f"Webhook error: {e}")
         return jsonify({"status": "fail", "message": str(e)}), 500
 
 

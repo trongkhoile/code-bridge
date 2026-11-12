@@ -30,9 +30,9 @@ def _check_daily_limit(mt5_mod, max_daily_loss: float, max_daily_profit: float):
         return False, None
     pnl = _compute_daily_pnl(mt5_mod)
     if max_daily_loss and pnl <= -abs(max_daily_loss):
-        return True, f"Đã chạm giới hạn lỗ ngày ({pnl:.2f}), bỏ qua tín hiệu mới"
+        return True, f"Daily loss limit reached ({pnl:.2f}), ignoring new signal"
     if max_daily_profit and pnl >= abs(max_daily_profit):
-        return True, f"Đã chạm giới hạn lãi ngày ({pnl:.2f}), bỏ qua tín hiệu mới"
+        return True, f"Daily profit limit reached ({pnl:.2f}), ignoring new signal"
     return False, None
 
 
@@ -57,10 +57,10 @@ def connect(login: int = None, password: str = None, server: str = None,
         return False
     info = mt5.account_info()
     if info is None:
-        logger.error("Chưa có tài khoản nào đăng nhập trong MT5. Vui lòng đăng nhập trước.")
+        logger.error("No account is logged in to MT5. Please log in first.")
         mt5.shutdown()
         return False
-    logger.info(f"Kết nối MT5 thành công | Tài khoản: {info.login} | Số dư: {info.balance:.2f} {info.currency}")
+    logger.info(f"MT5 connected | Account: {info.login} | Balance: {info.balance:.2f} {info.currency}")
     return True
 
 
@@ -133,7 +133,7 @@ def place_order(
     close_direction: str = None,
 ) -> dict:
     if not _ensure_symbol(symbol):
-        return {"success": False, "error": f"Không tìm thấy symbol: {symbol}"}
+        return {"success": False, "error": f"Symbol not found: {symbol}"}
 
     action_lower = action.lower()
     if action_lower == "buy":
@@ -143,7 +143,7 @@ def place_order(
     elif action_lower == "close":
         return close_all_positions(symbol, comment, direction=close_direction)
     else:
-        return {"success": False, "error": f"Action không hợp lệ: {action}"}
+        return {"success": False, "error": f"Invalid action: {action}"}
 
     hit_limit, limit_msg = _check_daily_limit(mt5, max_daily_loss, max_daily_profit)
     if hit_limit:
@@ -153,13 +153,13 @@ def place_order(
     existing = mt5.positions_get(symbol=symbol)
     if existing:
         if existing[0].type == order_type:
-            msg = f"Đã có lệnh {action_lower.upper()} mở cho {symbol}, bỏ qua tín hiệu trùng chiều"
+            msg = f"{action_lower.upper()} position already open for {symbol}, ignoring same-direction signal"
             logger.info(msg)
             return {"success": True, "skipped": True, "symbol": symbol, "message": msg}
         closed, errors = _close_symbol_positions(mt5, symbol, _magic_number, comment)
         if errors:
-            return {"success": False, "error": f"Không đóng được lệnh ngược chiều: {errors}"}
-        logger.info(f"Đóng {closed} lệnh ngược chiều {symbol} để mở {action_lower.upper()} mới")
+            return {"success": False, "error": f"Failed to close opposite position(s): {errors}"}
+        logger.info(f"Closed {closed} opposite {symbol} position(s) to open new {action_lower.upper()}")
 
     price = mt5.symbol_info_tick(symbol).ask if action_lower == "buy" else mt5.symbol_info_tick(symbol).bid
     filling_mode = _get_filling_mode(symbol)
@@ -187,7 +187,7 @@ def place_order(
     if result.retcode != mt5.TRADE_RETCODE_DONE:
         return {"success": False, "error": result.comment, "retcode": result.retcode}
 
-    logger.info(f"Lệnh thành công | {action.upper()} {lot} {symbol} @ {price} | ticket={result.order}")
+    logger.info(f"Order filled | {action.upper()} {lot} {symbol} @ {price} | ticket={result.order}")
     return {
         "success": True,
         "ticket": result.order,
@@ -241,7 +241,7 @@ def _close_symbol_positions(mt5_mod, symbol: str, magic: int, comment: str, dire
         r = mt5_mod.order_send(req)
         if r and r.retcode == mt5_mod.TRADE_RETCODE_DONE:
             closed += 1
-            logger.info(f"Đóng lệnh ticket={pos.ticket}")
+            logger.info(f"Closed position ticket={pos.ticket}")
         else:
             errors.append(r.comment if r else str(mt5_mod.last_error()))
 
@@ -251,7 +251,7 @@ def _close_symbol_positions(mt5_mod, symbol: str, magic: int, comment: str, dire
 def close_all_positions(symbol: str, comment: str = "close", direction: str = None) -> dict:
     closed, errors = _close_symbol_positions(mt5, symbol, _magic_number, comment, direction)
     if closed == 0 and not errors:
-        return {"success": True, "closed": 0, "message": "Không có lệnh đang mở"}
+        return {"success": True, "closed": 0, "message": "No open positions"}
     return {"success": len(errors) == 0, "closed": closed, "errors": errors}
 
 
@@ -278,7 +278,7 @@ def _order_worker(args: dict) -> dict:
     if not _mt5.initialize(**init_kw):
         return {
             "success": False, "name": name, "login": login,
-            "error": f"Không kết nối được MT5: {_mt5.last_error()}",
+            "error": f"Cannot connect to MT5: {_mt5.last_error()}",
         }
 
     try:
@@ -305,7 +305,7 @@ def _order_worker(args: dict) -> dict:
         sym = _mt5.symbol_info(symbol)
         if sym is None:
             return {"success": False, "name": name, "login": login,
-                    "error": f"Symbol không tồn tại: {symbol}"}
+                    "error": f"Symbol does not exist: {symbol}"}
         if not sym.visible:
             _mt5.symbol_select(symbol, True)
             sym = _mt5.symbol_info(symbol)
@@ -329,7 +329,7 @@ def _order_worker(args: dict) -> dict:
             otype = _mt5.ORDER_TYPE_SELL
         else:
             return {"success": False, "name": name, "login": login,
-                    "error": f"Action không hợp lệ: {action}"}
+                    "error": f"Invalid action: {action}"}
 
         hit_limit, limit_msg = _check_daily_limit(_mt5, max_daily_loss, max_daily_profit)
         if hit_limit:
@@ -340,11 +340,11 @@ def _order_worker(args: dict) -> dict:
         if existing:
             if existing[0].type == otype:
                 return {"success": True, "skipped": True, "name": name, "login": login,
-                        "symbol": symbol, "message": f"Đã có lệnh {action.upper()} mở cho {symbol}, bỏ qua tín hiệu trùng chiều"}
+                        "symbol": symbol, "message": f"{action.upper()} position already open for {symbol}, ignoring same-direction signal"}
             closed, errors = _close_symbol_positions(_mt5, symbol, magic, comment)
             if errors:
                 return {"success": False, "name": name, "login": login,
-                        "error": f"Không đóng được lệnh ngược chiều: {errors}"}
+                        "error": f"Failed to close opposite position(s): {errors}"}
 
         price = _mt5.symbol_info_tick(symbol).ask if action == "buy" else _mt5.symbol_info_tick(symbol).bid
 
@@ -396,7 +396,7 @@ def _test_account_worker(args: dict) -> dict:
     _mt5.shutdown()
 
     if info is None:
-        return {"success": False, "error": "Không lấy được thông tin tài khoản"}
+        return {"success": False, "error": "Failed to get account info"}
 
     return {
         "success": True,
@@ -438,7 +438,7 @@ def place_order_parallel(accounts: list, order_params: dict, magic: int = 202401
     """Đặt lệnh song song trên tất cả tài khoản đang bật."""
     enabled = [a for a in accounts if a.get("enabled", True) and (a.get("login") or a.get("terminal_path"))]
     if not enabled:
-        logger.warning("Không có tài khoản nào được bật / được cấu hình")
+        logger.warning("No accounts enabled / configured")
         return []
 
     worker_args = [{**order_params, **a, "magic": magic} for a in enabled]
@@ -466,8 +466,8 @@ def place_order_parallel(accounts: list, order_params: dict, magic: int = 202401
                     f" @ {r['price']} | ticket={r['ticket']}"
                 )
             else:
-                logger.info(f"[{n}]  Đóng {r.get('closed', 0)} lệnh")
+                logger.info(f"[{n}]  Closed {r.get('closed', 0)} position(s)")
         else:
-            logger.error(f"[{n}]  Thất bại: {r.get('error', '?')}")
+            logger.error(f"[{n}]  Failed: {r.get('error', '?')}")
 
     return results

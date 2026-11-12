@@ -38,6 +38,7 @@ C_TEXT   = "#ffffff"
 C_MUTED  = "#7fb5d5"
 C_HINT   = "#4a7a9b"
 
+import firewall
 import mt5_handler
 import server as srv
 
@@ -89,7 +90,16 @@ class App(ctk.CTk):
         self._setup_logging()
         self._build_ui()
         self._connect_mt5()
+        self._fw_checked_port = None
+        self._check_firewall(self._settings["port"])
         self.after(150, self._poll_logs)
+
+    def _check_firewall(self, port: int):
+        """Kiểm tra / thêm rule firewall ở thread nền (không đơ giao diện khi chờ UAC)."""
+        if port == self._fw_checked_port:
+            return
+        self._fw_checked_port = port
+        threading.Thread(target=firewall.ensure_inbound_rule, args=(port,), daemon=True).start()
 
     # ── Settings ──────────────────────────────────────────────────────────────
 
@@ -572,7 +582,11 @@ class App(ctk.CTk):
                          "Cách dùng: tạo 4 Alert riêng trên TradingView — ứng với TP/SL của lệnh BUY\n"
                          "và TP/SL của lệnh SELL, webhook URL dùng đúng URL ở mục ①, Message dán đúng\n"
                          "nội dung tương ứng ở trên (giữ nguyên, không sửa {{ticker}}/{{interval}}/{{close}}\n"
-                         "— TradingView tự điền khi kích hoạt)."
+                         "— TradingView tự điền khi kích hoạt).\n"
+                         "Nếu dùng chỉ báo DAO_LENH_STRATEGY.pine: ở bước chọn Condition, chọn đúng\n"
+                         "BUY-SL - Router / SELL-SL - Router / BUY-TP - Router / SELL-TP - Router\n"
+                         "(không chọn \"Any alert() function call\"), rồi dán đè Message bằng đúng mẫu\n"
+                         "tương ứng ở trên. Trigger chọn \"Once Per Bar Close\"."
                      ),
                      font=("Segoe UI", 10), text_color=C_HINT,
                      anchor="w", justify="left", wraplength=500).pack(fill="x", pady=(0, 4))
@@ -689,7 +703,7 @@ class App(ctk.CTk):
         try:
             s = self._save_settings()
         except (ValueError, TypeError) as exc:
-            logging.error(f"Cài đặt không hợp lệ: {exc}")
+            logging.error(f"Invalid settings: {exc}")
             return
 
         srv.settings["token"]          = s["token"]
@@ -707,12 +721,15 @@ class App(ctk.CTk):
         self._server_thread = threading.Thread(target=self._flask_server.serve_forever, daemon=True)
         self._server_thread.start()
 
+        # Nếu đổi sang port khác so với lúc mở app thì kiểm tra firewall cho port mới
+        self._check_firewall(port)
+
         webhook_url = self._build_webhook_url(s)
         self._start_btn.configure(state="disabled")
         self._stop_btn.configure(state="normal")
         self._status_label.configure(text=f"●  Đang chạy  —  port {port}", text_color=C_ACCENT)
         self._tv_url_var.set(webhook_url)
-        logging.info(f"Server khởi động tại port {port} | Webhook: {webhook_url}")
+        logging.info(f"Server started on port {port} | Webhook: {webhook_url}")
 
     def _stop_server(self):
         if self._flask_server:
@@ -721,7 +738,7 @@ class App(ctk.CTk):
         self._start_btn.configure(state="normal")
         self._stop_btn.configure(state="disabled")
         self._status_label.configure(text="●  Đã dừng", text_color=C_RED)
-        logging.info("Server đã dừng")
+        logging.info("Server stopped")
 
     def _clear_log(self):
         self._log_box.configure(state="normal")
